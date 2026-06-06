@@ -1,0 +1,11 @@
+{
+  "allowlist": [
+    "@wxt-dev/browser/src/index.mjs",
+    "wxt/dist/browser.mjs",
+    "wxt/dist/utils/content-script-context.mjs",
+    "wxt/dist/utils/define-content-script.mjs",
+    "wxt/dist/utils/internal/custom-events.mjs",
+    "wxt/dist/utils/internal/location-watcher.mjs",
+    "wxt/dist/utils/internal/logger.mjs"
+  ]
+}

@@ -1,0 +1,40 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.md$
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+        exclude: (^|/)tsconfig.*\.json$
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  # Prettier (formatting) -- run via pnpm so it uses the version pinned
+  # in package.json.
+  - repo: local
+    hooks:
+      - id: prettier
+        name: prettier
+        entry: pnpm exec prettier --check
+        language: system
+        types_or: [javascript, ts, json, yaml, markdown]
+
+  # ESLint (lint) -- run via pnpm. Same reasoning as prettier.
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint
+        entry: pnpm exec eslint --max-warnings=0
+        language: system
+        types_or: [javascript, ts]
+        require_serial: true
+
+  # Secret scanning at commit time. The CI gitleaks step is the
+  # second line of defense; this hook catches leaks before they reach
+  # the remote.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks

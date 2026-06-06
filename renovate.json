@@ -1,0 +1,53 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":dependencyDashboard",
+    ":enableVulnerabilityAlertsWithLabel(security)",
+    "group:allNonMajor",
+    "schedule:weekly"
+  ],
+  "timezone": "Etc/UTC",
+  "rangeStrategy": "pin",
+  "pinDigests": true,
+  "prHourlyLimit": 4,
+  "prConcurrentLimit": 8,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security", "vulnerability"],
+    "schedule": "at any time"
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 4am on monday"]
+  },
+  "packageRules": [
+    {
+      "description": "Group WXT + Vite + Vitest together; WXT builds on Vite and Vitest tracks the same Vite line, so version skew breaks the build",
+      "matchPackageNames": ["wxt", "vite", "vitest"],
+      "groupName": "wxt-vite",
+      "schedule": ["before 4am on monday"]
+    },
+    {
+      "description": "Group eslint + plugins together; one bad version combo is the usual failure mode",
+      "matchPackageNames": ["eslint", "@eslint/js", "eslint-config-prettier", "typescript-eslint"],
+      "groupName": "eslint",
+      "schedule": ["before 4am on monday"]
+    },
+    {
+      "description": "Pin GitHub Actions to commit SHAs (security: tags can be moved)",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    },
+    {
+      "description": "Major version bumps need explicit review; never auto-merge",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["major-update"]
+    }
+  ],
+  "github-actions": {
+    "enabled": true
+  }
+}

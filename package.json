@@ -1,0 +1,55 @@
+{
+  "name": "gubbi-extension",
+  "version": "0.1.0",
+  "description": "Turn your AI chats into a searchable, structured diary. Cross-browser MV3 extension for gubbi.",
+  "private": false,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox --mv3",
+    "build": "wxt build && wxt build -b firefox --mv3",
+    "zip": "wxt zip && wxt zip -b firefox --mv3",
+    "check": "tsc -p tsconfig.json && tsc -p scripts/tsconfig.json",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "postinstall": "wxt prepare",
+    "verify": "pnpm check && pnpm lint && pnpm test && pnpm build && node scripts/verify-manifest.mjs"
+  },
+  "dependencies": {
+    "@sentry/browser": "9.47.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/chrome": "0.1.43",
+    "@types/node": "25.9.2",
+    "eslint": "10.2.1",
+    "eslint-config-prettier": "10.1.8",
+    "globals": "17.5.0",
+    "prettier": "3.8.3",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.59.1",
+    "vite": "7.3.5",
+    "vitest": "4.1.8",
+    "wxt": "0.20.26"
+  },
+  "prettier": {
+    "useTabs": false,
+    "tabWidth": 2,
+    "singleQuote": false,
+    "semi": true,
+    "trailingComma": "all",
+    "printWidth": 100
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

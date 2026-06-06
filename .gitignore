@@ -1,0 +1,20 @@
+node_modules
+
+# WXT build + generated output
+.output
+.wxt
+web-ext.config.ts
+stats.html
+
+# Test / coverage output
+coverage
+
+# Local env (public build-time values only; real values never committed)
+.env
+.env.*
+!.env.example
+*.local
+
+# OS
+.DS_Store
+Thumbs.db

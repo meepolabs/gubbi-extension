@@ -1,0 +1,18 @@
+# Package managers
+pnpm-lock.yaml
+
+# WXT build / generated output
+.output
+.wxt
+
+# Coverage output
+coverage
+
+# Content-isolation snapshots (machine-generated; JSON.stringify formatted)
+content-isolation
+
+# Binary assets
+src/assets
+
+# License text is verbatim upstream; do not reformat
+LICENSE
