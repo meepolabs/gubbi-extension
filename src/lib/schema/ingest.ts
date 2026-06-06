@@ -60,7 +60,7 @@ export type ConversationPayload = z.infer<typeof ConversationPayloadSchema>;
 export type IngestConversationRequest = z.infer<typeof IngestConversationRequestSchema>;
 export type IngestConversationResponse = z.infer<typeof IngestConversationResponseSchema>;
 
-// Normalized aliases used by the scraper adapters. A scraped conversation is
+// Normalized aliases used by the connector adapters. A collected conversation is
 // exactly the ingest ConversationPayload shape, ready to batch and upload.
 export type NormalizedMessage = MessagePayload;
 export type NormalizedConversation = ConversationPayload;

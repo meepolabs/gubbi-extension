@@ -1,0 +1,84 @@
+{
+  "uuid": "claude-conv-0001",
+  "name": "Plan a reading list",
+  "created_at": "2026-06-05T09:00:00.000000Z",
+  "updated_at": "2026-06-05T09:15:00.000000Z",
+  "current_leaf_message_uuid": "claude-msg-2",
+  "chat_messages": [
+    {
+      "uuid": "claude-msg-1",
+      "text": "Can you help me plan a short reading list?",
+      "content": [
+        {
+          "type": "text",
+          "text": "Can you help me plan a short reading list?",
+          "start_timestamp": "2026-06-05T09:00:00.000000Z",
+          "stop_timestamp": "2026-06-05T09:00:01.000000Z",
+          "citations": []
+        }
+      ],
+      "sender": "human",
+      "index": 0,
+      "created_at": "2026-06-05T09:00:00.000000Z",
+      "updated_at": "2026-06-05T09:00:00.000000Z",
+      "attachments": [
+        {
+          "id": "att-1",
+          "file_name": "notes.txt",
+          "file_size": 1234,
+          "file_type": "text/plain",
+          "extracted_content": "SECRET extracted body that must not leak",
+          "created_at": "2026-06-05T09:00:00.000000Z"
+        }
+      ],
+      "files": [
+        {
+          "success": true,
+          "file_kind": "image",
+          "file_uuid": "file-1",
+          "file_name": "diagram.png",
+          "created_at": "2026-06-05T09:00:00.000000Z",
+          "thumbnail_url": "https://example.invalid/t.png",
+          "preview_url": "https://example.invalid/p.png"
+        }
+      ],
+      "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+    },
+    {
+      "uuid": "claude-msg-2",
+      "text": "Sure, here is a plan.",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "The user wants a short list. Consider essays then a novel.",
+          "summaries": [],
+          "cut_off": false,
+          "truncated": false,
+          "start_timestamp": "2026-06-05T09:14:00.000000Z",
+          "stop_timestamp": "2026-06-05T09:14:03.000000Z"
+        },
+        {
+          "type": "tool_use",
+          "name": "web_search",
+          "text": "",
+          "start_timestamp": "2026-06-05T09:14:00.000000Z",
+          "stop_timestamp": "2026-06-05T09:14:02.000000Z"
+        },
+        {
+          "type": "text",
+          "text": "Start with three short essays, then one novel.",
+          "start_timestamp": "2026-06-05T09:14:05.000000Z",
+          "stop_timestamp": "2026-06-05T09:15:00.000000Z",
+          "citations": []
+        }
+      ],
+      "sender": "assistant",
+      "index": 1,
+      "created_at": "2026-06-05T09:15:00.000000Z",
+      "updated_at": "2026-06-05T09:15:00.000000Z",
+      "attachments": [],
+      "files": [],
+      "parent_message_uuid": "claude-msg-1"
+    }
+  ]
+}

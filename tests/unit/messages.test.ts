@@ -17,16 +17,16 @@ describe("isExtensionMessage", () => {
     ).toBe(true);
   });
 
-  it("accepts a SCRAPE_REQUEST message", () => {
+  it("accepts a CONVERSATION_REQUEST message", () => {
     expect(
-      isExtensionMessage({ type: "SCRAPE_REQUEST", platform: "claude", conversationId: "c1" }),
+      isExtensionMessage({ type: "CONVERSATION_REQUEST", platform: "claude", conversationId: "c1" }),
     ).toBe(true);
   });
 
-  it("accepts a SCRAPE_RESULT message", () => {
+  it("accepts a CONVERSATION_RESULT message", () => {
     expect(
       isExtensionMessage({
-        type: "SCRAPE_RESULT",
+        type: "CONVERSATION_RESULT",
         platform: "claude",
         conversationId: "c1",
         result: { ok: false, error: "boom" },

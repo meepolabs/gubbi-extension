@@ -1,0 +1,12 @@
+[
+  {
+    "uuid": "org-chat",
+    "name": "Personal",
+    "capabilities": ["claude_max", "chat"]
+  },
+  {
+    "uuid": "org-api",
+    "name": "Console",
+    "capabilities": ["api"]
+  }
+]

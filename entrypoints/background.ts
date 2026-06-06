@@ -25,7 +25,7 @@ function ensureSyncAlarm(): void {
 }
 
 function routeMessage(message: ExtensionMessage): void {
-  // TODO(phase-1b): dispatch SYNC_* / SCRAPE_RESULT to the sync orchestrator.
+  // TODO(phase-1b): dispatch SYNC_* / CONVERSATION_RESULT to the sync orchestrator.
   logger.debug("message received (no-op router)", { type: message.type });
 }
 

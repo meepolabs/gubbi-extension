@@ -1,44 +1,23 @@
 import { defineContentScript } from "wxt/utils/define-content-script";
 
-import { logger } from "../../src/lib/logger";
-import { isExtensionMessage, type ScrapeResultMessage } from "../../src/lib/messages";
+import { makeContentMessageListener } from "../../src/lib/connectors/content-listener";
+import { ChatGptFetcher } from "../../src/lib/connectors/chatgpt/fetch";
 
-// ChatGPT content script (chatgpt.com). Skeleton only.
+// ChatGPT content script (chatgpt.com).
 //
-// Content-script isolation rule: this script runs in the page's world and
-// handles raw conversation data, so it MUST contain zero third-party runtime
-// code (CI-enforced by the eslint entrypoints/*.content/** rule and by the
-// in-build content-isolation gate). It uses the ambient chrome.* globals only
-// -- it must NOT import `browser` or anything from #imports, which would pull
-// @wxt-dev/browser into the content bundle. It does a same-origin fetch of the
-// page the user is on and returns RAW platform JSON to the background context
-// via messages. ALL normalization and Zod validation happen in the background
-// / lib context -- NEVER here. That is why the same-origin scrape does not use
-// the net/fetch host guard and imports no schema runtime.
-//
-// TODO(phase-1b): implement the same-origin scrape of chatgpt.com here.
-
-const PLATFORM = "chatgpt" as const;
+// CONTENT-SCRIPT ISOLATION (CI-enforced): runs in an isolated world over the
+// page and handles raw conversation data, so it MUST contain zero third-party
+// runtime code. It imports only the wxt define utility and content-safe
+// first-party modules (the listener factory + the ChatGptFetcher, neither of
+// which pulls zod/schema). It does same-origin reads of chatgpt.com and returns
+// RAW platform JSON to the background; ALL normalization + Zod validation happen
+// in the background, never here. Ambient chrome.* only (no `browser`/#imports).
 
 export default defineContentScript({
   matches: ["https://chatgpt.com/*"],
   runAt: "document_idle",
   world: "ISOLATED",
   main() {
-    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-      if (!isExtensionMessage(message) || message.type !== "SCRAPE_REQUEST") return false;
-      logger.info("scrape request received (not implemented)", {
-        platform: PLATFORM,
-        conversationId: message.conversationId,
-      });
-      const response: ScrapeResultMessage = {
-        type: "SCRAPE_RESULT",
-        platform: PLATFORM,
-        conversationId: message.conversationId,
-        result: { ok: false, error: "not implemented" },
-      };
-      sendResponse(response);
-      return false;
-    });
+    chrome.runtime.onMessage.addListener(makeContentMessageListener("chatgpt", new ChatGptFetcher()));
   },
 });

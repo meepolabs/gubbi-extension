@@ -1,11 +1,16 @@
-import type { ConversationPayload, Platform } from "./schema/ingest";
-import type { ConversationSummary } from "./scrapers/base";
+import type { Platform } from "./schema/ingest";
+import type { ConversationSummary } from "./connectors/base";
 
 // Single message envelope for service-worker <-> content-script <-> popup
 // communication. The "type" field is the discriminant. This module is types +
 // a guard only; it intentionally pulls in no runtime third-party code so it is
 // safe to import from content scripts (all schema/adapter imports are type-only
 // and erased at build).
+//
+// The content script returns RAW platform JSON (unknown) -- it never normalizes
+// or Zod-validates. Normalization happens in the background after a
+// CONVERSATION_RESULT arrives, which is why CONVERSATION_RESULT carries
+// `raw: unknown`, not a validated ConversationPayload.
 
 export interface SyncStartMessage {
   type: "SYNC_START";
@@ -31,8 +36,8 @@ export interface SyncErrorMessage {
   message: string;
 }
 
-// LIST_* drives the adapter's listConversations: the content script returns a
-// page of lightweight summaries.
+// LIST_* drives the content fetcher's listConversationsRaw: the content script
+// returns a page of lightweight summaries (raw, already plain JSON).
 export interface ListRequestMessage {
   type: "LIST_REQUEST";
   platform: Platform;
@@ -41,7 +46,8 @@ export interface ListRequestMessage {
 
 export type ListOutcome =
   | { ok: true; summaries: ConversationSummary[] }
-  | { ok: false; error: string };
+  | { ok: false; rateLimited: true; retryAfterSeconds?: number }
+  | { ok: false; rateLimited?: false; error: string };
 
 export interface ListResultMessage {
   type: "LIST_RESULT";
@@ -49,23 +55,25 @@ export interface ListResultMessage {
   result: ListOutcome;
 }
 
-// SCRAPE_* drives the adapter's fetchConversation: the content script returns a
-// single fully scraped conversation.
-export interface ScrapeRequestMessage {
-  type: "SCRAPE_REQUEST";
+// CONVERSATION_* drives the content fetcher's fetchConversationRaw: the content
+// script returns one conversation's RAW platform JSON (unknown). The background
+// normalizes + Zod-validates it; the content script never does.
+export interface ConversationRequestMessage {
+  type: "CONVERSATION_REQUEST";
   platform: Platform;
   conversationId: string;
 }
 
-export type ScrapeOutcome =
-  | { ok: true; conversation: ConversationPayload }
-  | { ok: false; error: string };
+export type ConversationOutcome =
+  | { ok: true; raw: unknown }
+  | { ok: false; rateLimited: true; retryAfterSeconds?: number }
+  | { ok: false; rateLimited?: false; error: string };
 
-export interface ScrapeResultMessage {
-  type: "SCRAPE_RESULT";
+export interface ConversationResultMessage {
+  type: "CONVERSATION_RESULT";
   platform: Platform;
   conversationId: string;
-  result: ScrapeOutcome;
+  result: ConversationOutcome;
 }
 
 export type ExtensionMessage =
@@ -75,8 +83,8 @@ export type ExtensionMessage =
   | SyncErrorMessage
   | ListRequestMessage
   | ListResultMessage
-  | ScrapeRequestMessage
-  | ScrapeResultMessage;
+  | ConversationRequestMessage
+  | ConversationResultMessage;
 
 // Compile-time exhaustiveness: a Record keyed by the discriminant union requires
 // exactly one entry per message type, so adding a member to ExtensionMessage
@@ -89,8 +97,8 @@ const MESSAGE_TYPE_PRESENCE: Record<ExtensionMessage["type"], true> = {
   SYNC_ERROR: true,
   LIST_REQUEST: true,
   LIST_RESULT: true,
-  SCRAPE_REQUEST: true,
-  SCRAPE_RESULT: true,
+  CONVERSATION_REQUEST: true,
+  CONVERSATION_RESULT: true,
 };
 
 const MESSAGE_TYPES = new Set<ExtensionMessage["type"]>(

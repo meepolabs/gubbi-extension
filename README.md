@@ -7,7 +7,7 @@ Chrome and Firefox as Manifest V3.
 
 This repository is the extension skeleton (Phase 1, task 1). The ingest wire
 schema, the outbound-fetch host guard, and the platform-adapter interface are
-implemented for real; scrapers, sync orchestration, and UI are typed stubs that
+implemented for real; connectors, sync orchestration, and UI are typed stubs that
 throw `not implemented` and are filled in across later phases.
 
 ## License
@@ -170,8 +170,8 @@ src/
   lib/
     schema/ingest.ts      Zod ingest wire schema (mirror of the backend)
     net/fetch.ts          host-whitelisting fetch wrapper (egress allowlist)
-    scrapers/base.ts      LLMPlatformAdapter interface + registry type
-    scrapers/*.ts         per-platform adapters (stubs)
+    connectors/base.ts    LLMPlatformAdapter interface + registry type
+    connectors/*.ts       per-platform adapters (stubs)
     messages.ts           background <-> content <-> popup message union + guard
     storage.ts            typed chrome.storage.local wrapper
     api.ts                ingest API client (stub)

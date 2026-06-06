@@ -1,0 +1,105 @@
+{
+  "conversation_id": "chatgpt-conv-0001",
+  "title": "Refactor a sorting helper",
+  "create_time": 1717603200.5,
+  "update_time": 1717606800.25,
+  "current_node": "node-assistant-final",
+  "mapping": {
+    "node-root": {
+      "id": "node-root",
+      "message": null,
+      "parent": null,
+      "children": ["node-system"]
+    },
+    "node-system": {
+      "id": "node-system",
+      "message": {
+        "id": "msg-system",
+        "author": { "role": "system", "name": null, "metadata": {} },
+        "create_time": null,
+        "content": { "content_type": "text", "parts": ["You are a helpful assistant."] },
+        "status": "finished_successfully",
+        "end_turn": null,
+        "recipient": "all"
+      },
+      "parent": "node-root",
+      "children": ["node-user-1"]
+    },
+    "node-user-1": {
+      "id": "node-user-1",
+      "message": {
+        "id": "msg-user-1",
+        "author": { "role": "user", "name": null, "metadata": {} },
+        "create_time": 1717603260.0,
+        "content": { "content_type": "text", "parts": ["Sort these numbers for me please."] },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "recipient": "all"
+      },
+      "parent": "node-system",
+      "children": ["node-tool-1"]
+    },
+    "node-tool-1": {
+      "id": "node-tool-1",
+      "message": {
+        "id": "msg-tool-1",
+        "author": { "role": "tool", "name": "python", "metadata": {} },
+        "create_time": 1717603280.0,
+        "content": { "content_type": "text", "parts": ["sorted([3,1,2]) -> [1,2,3]"] },
+        "status": "finished_successfully",
+        "end_turn": null,
+        "recipient": "all"
+      },
+      "parent": "node-user-1",
+      "children": ["node-assistant-1-original", "node-assistant-code"]
+    },
+    "node-assistant-1-original": {
+      "id": "node-assistant-1-original",
+      "message": {
+        "id": "msg-assistant-1-original",
+        "author": { "role": "assistant", "name": null, "metadata": {} },
+        "create_time": 1717603300.0,
+        "content": {
+          "content_type": "text",
+          "parts": ["This is the FIRST regenerated answer that the user discarded."]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "recipient": "all"
+      },
+      "parent": "node-tool-1",
+      "children": []
+    },
+    "node-assistant-code": {
+      "id": "node-assistant-code",
+      "message": {
+        "id": "msg-assistant-code",
+        "author": { "role": "assistant", "name": null, "metadata": {} },
+        "create_time": 1717603320.0,
+        "content": { "content_type": "code", "parts": ["def sort_nums(xs):\n    return sorted(xs)"] },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "recipient": "all"
+      },
+      "parent": "node-tool-1",
+      "children": ["node-assistant-final"]
+    },
+    "node-assistant-final": {
+      "id": "node-assistant-final",
+      "message": {
+        "id": "msg-assistant-final",
+        "author": { "role": "assistant", "name": null, "metadata": {} },
+        "create_time": 1717603340.0,
+        "content": {
+          "content_type": "text",
+          "parts": ["Here you go: the numbers are now sorted in ascending order."]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "recipient": "all"
+      },
+      "parent": "node-assistant-code",
+      "children": []
+    }
+  }
+}
