@@ -38,7 +38,7 @@ export function makeContentMessageListener(
           sendResponse({
             type: "LIST_RESULT",
             platform,
-            result: { ok: false, error: "list request failed" },
+            result: { ok: false, reason: "transient_http" },
           });
         });
       return true;
@@ -62,12 +62,18 @@ export function makeContentMessageListener(
             type: "CONVERSATION_RESULT",
             platform,
             conversationId,
-            result: { ok: false, error: "conversation request failed" },
+            result: { ok: false, reason: "transient_http" },
           });
         });
       return true;
     }
 
+    // DEFAULT CASE: any message this content script does not own -- an unknown
+    // type (e.g. a STATUS_* or future type a newer background sends to an older
+    // content script), or a LIST_/CONVERSATION_ request for a different platform
+    // -- is ignored. Returning false (without throwing and without calling
+    // sendResponse) tells the MV3 runtime this listener will not answer, so an
+    // older content script survives a future message type rather than breaking.
     return false;
   };
 }

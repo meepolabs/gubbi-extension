@@ -7,6 +7,7 @@ import type {
   ConversationResultMessage,
   ListRequestMessage,
   ConversationRequestMessage,
+  FailureReason,
 } from "../../src/lib/messages";
 
 import rawChatGpt from "../fixtures/raw-chatgpt-conversation.json";
@@ -91,8 +92,28 @@ function rateLimitedList(retryAfterSeconds?: number): ListResultMessage {
     platform: "chatgpt",
     result:
       retryAfterSeconds === undefined
-        ? { ok: false, rateLimited: true }
-        : { ok: false, rateLimited: true, retryAfterSeconds },
+        ? { ok: false, reason: "rate_limited" }
+        : { ok: false, reason: "rate_limited", retryAfterSeconds },
+  };
+}
+
+function failedList(reason: Exclude<FailureReason, "rate_limited">): ListResultMessage {
+  return {
+    type: "LIST_RESULT",
+    platform: "chatgpt",
+    result: { ok: false, reason },
+  };
+}
+
+function failedConversation(
+  conversationId: string,
+  reason: Exclude<FailureReason, "rate_limited">,
+): ConversationResultMessage {
+  return {
+    type: "CONVERSATION_RESULT",
+    platform: "chatgpt",
+    conversationId,
+    result: { ok: false, reason },
   };
 }
 
@@ -107,8 +128,8 @@ function rateLimitedConversation(conversationId: string, retryAfterSeconds?: num
     conversationId,
     result:
       retryAfterSeconds === undefined
-        ? { ok: false, rateLimited: true }
-        : { ok: false, rateLimited: true, retryAfterSeconds },
+        ? { ok: false, reason: "rate_limited" }
+        : { ok: false, reason: "rate_limited", retryAfterSeconds },
   };
 }
 
@@ -152,8 +173,67 @@ describe("collectFromTab", () => {
 
     // Assert
     expect(outcome.status).toBe("ok");
-    expect(outcome.request.conversations).toHaveLength(2);
+    if (outcome.status === "ok") {
+      expect(outcome.request.conversations).toHaveLength(2);
+      expect(outcome.complete).toBe(true);
+    }
     expect(conversationRequestCount(spy)).toBe(2);
+  });
+
+  it("surfaces a non-429 list failure as the failed variant with the mapped reason", async () => {
+    // Arrange: the list call reports a lost session (401/403-class). This must
+    // NOT be laundered into an empty-ok run -- it is a real failure.
+    const spy = stubTab({ list: failedList("session_lost"), conversationById: {} });
+
+    // Act
+    const outcome = await collectFromTab(TAB_ID, "chatgpt");
+
+    // Assert
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed") {
+      expect(outcome.reason).toBe("session_lost");
+      expect(outcome.request.conversations).toHaveLength(0);
+    }
+    // No summaries were ever obtained, so no conversation fetches were issued.
+    expect(conversationRequestCount(spy)).toBe(0);
+  });
+
+  it("maps a network-class list failure to the failed variant", async () => {
+    // Arrange
+    stubTab({ list: failedList("network"), conversationById: {} });
+
+    // Act
+    const outcome = await collectFromTab(TAB_ID, "chatgpt");
+
+    // Assert
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed") expect(outcome.reason).toBe("network");
+  });
+
+  it("continues past a single non-429 conversation failure and reports it by reason", async () => {
+    // Arrange: three summaries; the second conversation fetch fails (session
+    // lost) but the run continues and collects c1 and c3.
+    const spy = stubTab({
+      list: okList(["c1", "c2", "c3"]),
+      conversationById: {
+        c1: okConversation("c1", structuredClone(rawChatGpt)),
+        c2: failedConversation("c2", "session_lost"),
+        c3: okConversation("c3", { ...structuredClone(rawChatGpt), conversation_id: "chatgpt-conv-0003" }),
+      },
+    });
+
+    // Act
+    const outcome = await collectFromTab(TAB_ID, "chatgpt");
+
+    // Assert: run completes ok with the two good conversations; the failed one
+    // is counted under its reason so the orchestrator can detect drift.
+    expect(outcome.status).toBe("ok");
+    if (outcome.status === "ok") {
+      expect(outcome.request.conversations).toHaveLength(2);
+      expect(outcome.complete).toBe(true);
+      expect(outcome.failures.session_lost).toBe(1);
+    }
+    expect(conversationRequestCount(spy)).toBe(3); // all three attempted
   });
 
   it("stops on a list 429: status rate_limited, retryAfter propagated, zero conversation requests", async () => {
@@ -206,5 +286,80 @@ describe("collectFromTab", () => {
       expect(outcome.request.conversations).toHaveLength(1); // only c1, collected before the 429
     }
     expect(conversationRequestCount(spy)).toBe(2); // c1 then c2; c3 never requested
+  });
+
+  it("maps a sendMessage rejection on the list call to failed{transient_http}, not a throw", async () => {
+    // Arrange: a closed/listener-less tab makes chrome.tabs.sendMessage reject
+    // with "Could not establish connection". collectFromTab must NOT throw.
+    const sendMessage = vi.fn(async () => {
+      throw new Error("Could not establish connection. Receiving end does not exist.");
+    });
+    vi.stubGlobal("chrome", { tabs: { sendMessage } });
+
+    // Act
+    const outcome = await collectFromTab(TAB_ID, "chatgpt");
+
+    // Assert
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed") {
+      expect(outcome.reason).toBe("transient_http");
+      expect(outcome.request.conversations).toHaveLength(0);
+    }
+  });
+
+  it("maps a shape-mismatched list response to failed{malformed_response}", async () => {
+    // Arrange: a stale content script answers with an old/foreign envelope shape.
+    const sendMessage = vi.fn(async () => ({ type: "WRONG", payload: 1 }));
+    vi.stubGlobal("chrome", { tabs: { sendMessage } });
+
+    // Act
+    const outcome = await collectFromTab(TAB_ID, "chatgpt");
+
+    // Assert
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed") expect(outcome.reason).toBe("malformed_response");
+  });
+
+  it("treats a shape-mismatched conversation response as a per-conversation malformed failure", async () => {
+    // Arrange: the list is fine but the conversation fetch returns a foreign
+    // shape (version skew). The run continues; the bad one is counted malformed.
+    const sendMessage = vi.fn(
+      async (_tabId: number, message: ListRequestMessage | ConversationRequestMessage) => {
+        if (message.type === "LIST_REQUEST") return okList(["c1"]);
+        return { type: "NOT_A_RESULT" };
+      },
+    );
+    vi.stubGlobal("chrome", { tabs: { sendMessage } });
+
+    // Act
+    const outcome = await collectFromTab(TAB_ID, "chatgpt");
+
+    // Assert
+    expect(outcome.status).toBe("ok");
+    if (outcome.status === "ok") {
+      expect(outcome.request.conversations).toHaveLength(0);
+      expect(outcome.failures.malformed_response).toBe(1);
+    }
+  });
+
+  it("maps a sendMessage rejection on a conversation call to a per-conversation transient failure", async () => {
+    // Arrange: list ok, but the tab disconnects before the conversation fetch.
+    const sendMessage = vi.fn(
+      async (_tabId: number, message: ListRequestMessage | ConversationRequestMessage) => {
+        if (message.type === "LIST_REQUEST") return okList(["c1"]);
+        throw new Error("Could not establish connection.");
+      },
+    );
+    vi.stubGlobal("chrome", { tabs: { sendMessage } });
+
+    // Act
+    const outcome = await collectFromTab(TAB_ID, "chatgpt");
+
+    // Assert: the run completes ok with zero conversations; the failure is tallied.
+    expect(outcome.status).toBe("ok");
+    if (outcome.status === "ok") {
+      expect(outcome.request.conversations).toHaveLength(0);
+      expect(outcome.failures.transient_http).toBe(1);
+    }
   });
 });

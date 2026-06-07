@@ -154,6 +154,9 @@ the public root at `/icons/*`. Final brand icons land in Phase 4.
 
 ## Layout
 
+For module-level navigation (what each area does, what it imports) see
+[`CODEMAP.md`](./CODEMAP.md). This is the file tree.
+
 ```
 wxt.config.ts             WXT config: manifest fn, imports:false, isolation hook
 scripts/
@@ -161,21 +164,30 @@ scripts/
   verify-manifest.mjs      post-build manifest + egress-allowlist assertions
 content-isolation/        committed per-browser wxt-internal allowlist snapshots
 entrypoints/
-  background.ts           background: sync alarm + message router (stub)
-  chatgpt.content/        chatgpt.com content script (isolated world, stub)
-  claude.content/         claude.ai content script (isolated world, stub)
-  popup/                  read-only popup (index.html + main.ts, stub)
-  options/                options page (index.html + main.ts, stub)
+  background.ts           service worker: startup recovery + sync alarm + message router
+  chatgpt.content/        chatgpt.com content script (isolated world)
+  claude.content/         claude.ai content script (isolated world)
+  popup/                  popup UI (index.html + main.ts; scaffolding, full UI later)
+  options/                options page (index.html + main.ts; scaffolding, full UI later)
 src/
   lib/
-    schema/ingest.ts      Zod ingest wire schema (mirror of the backend)
-    net/fetch.ts          host-whitelisting fetch wrapper (egress allowlist)
+    auth/                 OAuth pairing + token lifecycle (PKCE, exchange,
+                          rotation-safe refresh, revoke, TokenProvider, recovery)
+    sync/
+      collect.ts          drive one tab: list -> fetch -> normalize -> typed outcome
+      orchestrator.ts     single-flight sync: lease, cursor, batched upload, backoff
     connectors/base.ts    LLMPlatformAdapter interface + registry type
-    connectors/*.ts       per-platform adapters (stubs)
+    connectors/*          per-platform adapters (chatgpt, claude): fetch + normalize
+    net/fetch.ts          host-allowlisting fetch wrapper (egress chokepoint)
+    net/http-constants.ts shared HTTP status codes
+    schema/ingest.ts      Zod ingest wire schema (mirror of the backend)
     messages.ts           background <-> content <-> popup message union + guard
-    storage.ts            typed chrome.storage.local wrapper
-    api.ts                ingest API client (stub)
+    storage.ts            typed chrome.storage.local wrapper (all persisted blobs)
+    locks.ts              withStorageLock: heartbeated, owner-checked, stale-takeover
+    token-provider.ts     TokenProvider interface (api.ts depends on this, not auth/)
+    api.ts                typed ingest API upload client
     logger.ts             structured console logger
   assets/icons            placeholder icons (served at /icons/*)
 tests/                    vitest unit tests + fixtures
 ```
+
