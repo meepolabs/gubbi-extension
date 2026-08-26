@@ -24,12 +24,18 @@ jobs:
         run: |
           set -euo pipefail
           base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
-          curl -fsSL -o gitleaks.tar.gz "${base}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          # Download under the UPSTREAM filename: the checksums file lists that
+          # name, and `sha256sum -c` resolves the name from the line it is given
+          # rather than the file it was handed. Renaming on download made the
+          # check look for a file that did not exist, which failed as a missing
+          # file rather than a checksum mismatch.
+          curl -fsSL -O "${base}/${tarball}"
           curl -fsSL -o gitleaks.checksums "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
-          grep "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks.checksums | sha256sum -c -
-          tar -xzf gitleaks.tar.gz gitleaks
+          grep "${tarball}" gitleaks.checksums | sha256sum -c -
+          tar -xzf "${tarball}" gitleaks
           ./gitleaks dir . --no-banner --redact
-          rm -f gitleaks gitleaks.tar.gz gitleaks.checksums
+          rm -f gitleaks "${tarball}" gitleaks.checksums
 
       - name: Install pnpm
         uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
