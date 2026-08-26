@@ -85,7 +85,7 @@ no caret/tilde ranges.
 
 ## Dev setup
 
-Requires Node `>=20.19.0` and pnpm.
+Requires Node `>=22.13.0` and pnpm.
 
 ```sh
 pnpm install        # installs deps; runs `wxt prepare` (generates .wxt/)
@@ -190,4 +190,3 @@ src/
   assets/icons            placeholder icons (served at /icons/*)
 tests/                    vitest unit tests + fixtures
 ```
-
