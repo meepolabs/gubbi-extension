@@ -46,10 +46,5 @@
     "semi": true,
     "trailingComma": "all",
     "printWidth": 100
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
   }
 }

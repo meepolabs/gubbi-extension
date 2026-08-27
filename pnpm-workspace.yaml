@@ -1,0 +1,14 @@
+# Not a multi-package repo: this file exists only as pnpm's per-project config
+# file, which is the sole home for these settings. Omitting `packages:` keeps
+# the root as the only package.
+
+# Every build script in the tree must be listed. pnpm 11 defaults
+# `strictDepBuilds` to true, so an unlisted one fails the install rather than
+# warning.
+allowBuilds:
+  esbuild: true
+  # A child_process.spawnSync polyfill, reached transitively through the build
+  # tooling. Its postinstall shells out to `npm install` to add a native
+  # thread-sleep dependency, and only on runtimes predating spawnSync -- so on
+  # this package's Node floor it has nothing to do.
+  spawn-sync: false
