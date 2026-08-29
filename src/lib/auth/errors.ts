@@ -16,4 +16,3 @@ export class ReconnectRequiredError extends Error {
     this.name = "ReconnectRequiredError";
   }
 }
-
