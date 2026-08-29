@@ -1,0 +1,51 @@
+# Secret scanning -- adopted from meepo-conventions baseline. Identical in
+# every repo on purpose: one workflow name, one trigger set, one action pin,
+# so a reader (or a future audit) does not have to learn a per-repo variant.
+#
+# Runs on every PR + push, plus a weekly full-history scan to catch anything
+# historical that slipped past the diff scan on prior PRs. The weekly run is
+# the one that matters most here: `schedule` reads its definition from the
+# DEFAULT branch, and a diff scan can only ever see the commits in front of
+# it, so a secret committed weeks earlier surfaces only on the full sweep.
+
+name: gitleaks
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+  schedule:
+    - cron: "0 6 * * 1"
+
+# Cancel redundant runs on the same branch / PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  scan:
+    name: Scan for secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Full history so the schedule run can see everything.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # gitleaks-action v2 requires a license for any repo owned by a
+          # GitHub organization (free for OSS / individual-owned private
+          # repos). Store the key from gitleaks.io as a repo or org secret
+          # named GITLEAKS_LICENSE. Leaving it unset on an org repo causes
+          # the action to fail with "License key is required."
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true
+          GITLEAKS_ENABLE_SUMMARY: true
