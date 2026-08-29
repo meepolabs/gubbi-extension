@@ -12,3 +12,67 @@ allowBuilds:
   # thread-sleep dependency, and only on runtimes predating spawnSync -- so on
   # this package's Node floor it has nothing to do.
   spawn-sync: false
+
+# Security floors for advisories upstream has not shipped a fix for.
+#
+# Every one of these reaches the tree through BUILD/DEV tooling (wxt's
+# browser-launch stack, vite, postcss, eslint). The two dependencies that ship
+# inside the packaged extension are clean, so nothing vulnerable reaches a
+# user -- that bounds the blast radius to dev machines and CI, it does not make
+# the advisories ignorable.
+#
+# Preferred fix is always bumping the direct parent. That is unavailable here:
+# the shell-quote/tmp/adm-zip chain arrives via wxt -> web-ext-run -> fx-runner,
+# and web-ext-run's newest release (0.2.4) still depends on the vulnerable
+# fx-runner, so there is no parent version to move to.
+#
+# Each floor carries its advisory ID and a review date. An override left in
+# place after upstream fixes the issue silently blocks future minor upgrades,
+# so these are due for a re-check -- delete any whose parent has since bumped.
+# Review: 2027-02-28.
+overrides:
+  # GHSA-w7jw-789q-3m8p (critical: quote() does not escape newlines),
+  # GHSA-395f-4hp3-45gv. Via fx-runner; no fixed parent exists.
+  shell-quote@<1.8.4: ">=1.8.4"
+  # GHSA-ph9p-34f9-6g65 (path traversal via unsanitized prefix/postfix).
+  tmp@<0.2.6: ">=0.2.6"
+  # GHSA-xcpc-8h2w-3j85 (crafted ZIP triggers a 4GB allocation).
+  adm-zip@<0.6.0: ">=0.6.0"
+  # GHSA-28wg-ghj8-5hjv, GHSA-2v37-7h3g-55p8. Scoped at 3.x and up: nanoid
+  # resolves several majors in this tree and a bare key would coerce them all.
+  nanoid@<3.3.16: ">=3.3.16"
+  # GHSA-fxqj-rqcc-2cmp, GHSA-r28c-9q8g-f849.
+  postcss@<8.5.23: ">=8.5.23"
+  # brace-expansion is deliberately NOT overridden. Verified by experiment
+  # rather than reasoned about: a `<1.1.16` floor coerces the 1.x copy that
+  # `minimatch@3.1.5` resolves (multimatch <- web-ext-run <- wxt) up to 5.x,
+  # and minimatch then dies with `TypeError: expand is not a function` --
+  # 5.x exports a NAMED `expand` where the 1.x API it was written against
+  # exported a default. A `<5.0.9` floor breaks the same consumer the same
+  # way. Confirmed by requiring minimatch directly with and without the
+  # override; the sibling web repo hit this from the other direction and its
+  # own comment says a second per-major floor does not fix it either.
+  # Residual: GHSA-3jxr-9vmj-r5cp, GHSA-mh99-v99m-4gvg, GHSA-rgw5-rvv9-x895 --
+  # ReDoS in a glob matcher reached only by dev tooling, matching patterns
+  # from our own config rather than untrusted input. Revisit when wxt drops
+  # web-ext-run (its multimatch dep is the only thing holding minimatch 3.x).
+  # Same advisories on the 5.x line, reached via eslint > minimatch. Scoped
+  # separately rather than with a bare key: coercing every major to one floor
+  # is what broke the sibling web repo (5.x exports a named `expand` where 2.x
+  # exported a default). minimatch already declares `^5.0.8`, so this only
+  # un-sticks a stale resolution rather than forcing an incompatible major.
+  # NOT overridden on the 5.x line, and that is deliberate. `minimatch@3.1.5`
+  # (pulled by multimatch <- web-ext-run <- wxt) DECLARES `^1.1.7` but resolves
+  # a 5.x copy; coercing that copy to >=5.0.9 breaks it with
+  # `TypeError: expand is not a function`, because 5.x exports a named `expand`
+  # where the 1.x API it was written against exported a default. Verified here
+  # by requiring minimatch directly after the coercion, not reasoned about --
+  # the sibling web repo hit the same wall from the other direction.
+  # The residual advisories (GHSA-3jxr-9vmj-r5cp, GHSA-mh99-v99m-4gvg,
+  # GHSA-rgw5-rvv9-x895) are ReDoS in a glob matcher reached only by dev
+  # tooling, on patterns from our own config rather than untrusted input.
+  # Revisit when wxt drops web-ext-run's multimatch dependency.
+  # GHSA-g7r4-m6w7-qqqr (low; dev server request handling).
+  esbuild@<0.28.1: ">=0.28.1"
+  # GHSA-w5hq-g745-h8pq (moderate).
+  uuid@<11.1.1: ">=11.1.1"
