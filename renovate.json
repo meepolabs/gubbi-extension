@@ -4,23 +4,32 @@
     "config:recommended",
     ":semanticCommits",
     ":dependencyDashboard",
-    ":enableVulnerabilityAlertsWithLabel(security)",
     "group:allNonMajor",
     "schedule:weekly"
   ],
+  "baseBranchPatterns": ["develop"],
   "timezone": "Etc/UTC",
-  "rangeStrategy": "pin",
-  "pinDigests": true,
+  "automerge": false,
+  "minimumReleaseAge": "14 days",
+  "minimumReleaseAgeBehaviour": "timestamp-required",
+  "internalChecksFilter": "strict",
   "prHourlyLimit": 4,
   "prConcurrentLimit": 8,
   "vulnerabilityAlerts": {
     "enabled": true,
     "labels": ["security", "vulnerability"],
-    "schedule": "at any time"
+    "schedule": "at any time",
+    "minimumGroupSize": 1
   },
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["before 4am on monday"]
+  },
+  "pre-commit": {
+    "enabled": true
+  },
+  "github-actions": {
+    "enabled": true
   },
   "packageRules": [
     {
@@ -36,9 +45,43 @@
       "schedule": ["before 4am on monday"]
     },
     {
+      "description": "Pin exact versions for npm and GitHub Actions only; other managers keep Renovate's default range strategy",
+      "matchManagers": ["npm", "github-actions"],
+      "rangeStrategy": "pin"
+    },
+    {
       "description": "Pin GitHub Actions to commit SHAs (security: tags can be moved)",
       "matchManagers": ["github-actions"],
       "pinDigests": true
+    },
+    {
+      "description": "Actions are pinned as sha plus exact version tag, so a digest-only update means the tag was moved to another commit, which is the tampering case sha pinning exists to catch; release-age checks the tag original date and would not hold it, so require explicit dashboard approval. Initial pinning and version updates are unaffected",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Docker registry lookups provide no release timestamp, so the release-age delay can never be satisfied and every image update would be held indefinitely; image updates remain human-reviewed on the weekly schedule",
+      "matchDatasources": ["docker"],
+      "minimumReleaseAge": null
+    },
+    {
+      "description": "First-party library pinned to a reviewed commit and bumped deliberately alongside the change that needs it; the release-age delay is meaningless for our own code and the git-refs datasource has no release timestamp",
+      "matchDepNames": ["gubbi-common"],
+      "enabled": false
+    },
+    {
+      "description": "The pre-commit hook resolves gitleaks from git tags while the CI binary resolves from GitHub releases; resolve the hook from releases too so both group members see the same versions and release timestamps and always land on one version",
+      "matchManagers": ["pre-commit"],
+      "matchDepNames": ["gitleaks/gitleaks"],
+      "overrideDatasource": "github-releases"
+    },
+    {
+      "description": "Bump the CI gitleaks binary and the pre-commit hook rev together so local and CI scans agree; require both members rather than letting one open a PR alone",
+      "matchPackageNames": ["gitleaks/gitleaks"],
+      "groupName": "gitleaks",
+      "groupSlug": "gitleaks",
+      "minimumGroupSize": 2
     },
     {
       "description": "Major version bumps need explicit review; never auto-merge",
@@ -47,7 +90,28 @@
       "labels": ["major-update"]
     }
   ],
-  "github-actions": {
-    "enabled": true
-  }
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "OSV-scanner release pinned in the workflow env",
+      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "(?:^|\\n)\\s*OSV_VERSION:\\s*['\\\"]?(?<currentValue>\\d+\\.\\d+\\.\\d+)['\\\"]?"
+      ],
+      "depNameTemplate": "google/osv-scanner",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "gitleaks binary version pinned in the workflow env",
+      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "(?:^|\\n)\\s*GITLEAKS_VERSION:\\s*['\\\"]?(?<currentValue>\\d+\\.\\d+\\.\\d+)['\\\"]?"
+      ],
+      "depNameTemplate": "gitleaks/gitleaks",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    }
+  ]
 }
