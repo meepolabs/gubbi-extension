@@ -85,3 +85,6 @@ overrides:
   esbuild@<0.28.1: ">=0.28.1"
   # GHSA-w5hq-g745-h8pq (moderate).
   uuid@<11.1.1: ">=11.1.1"
+minimumReleaseAgeExclude:
+  # Renovate security update: vitest@4.1.11
+  - vitest@4.1.11
