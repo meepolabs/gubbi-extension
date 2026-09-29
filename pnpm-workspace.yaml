@@ -31,8 +31,9 @@ allowBuilds:
 # the advisories ignorable.
 #
 # Preferred fix is always bumping the direct parent. That is unavailable here:
-# the shell-quote/tmp/adm-zip chain arrives via wxt -> web-ext-run -> fx-runner,
-# and web-ext-run's newest release (0.2.4) still depends on the vulnerable
+# the shell-quote/tmp/adm-zip chain arrives via wxt -> web-ext-run (tmp
+# directly, shell-quote through fx-runner, adm-zip through firefox-profile), and
+# web-ext-run's newest release (0.2.4) still depends on the vulnerable
 # fx-runner, so there is no parent version to move to.
 #
 # Each floor carries its advisory ID and a review date. An override left in
@@ -45,8 +46,10 @@ overrides:
   shell-quote@<1.8.4: ">=1.8.4"
   # GHSA-ph9p-34f9-6g65 (path traversal via unsanitized prefix/postfix).
   tmp@<0.2.6: ">=0.2.6"
-  # GHSA-xcpc-8h2w-3j85 (crafted ZIP triggers a 4GB allocation).
-  adm-zip@<0.6.0: ">=0.6.0"
+  # GHSA-xcpc-8h2w-3j85 (crafted ZIP triggers a 4GB allocation),
+  # GHSA-7q85-xj36-vmfc (DoS), GHSA-vwc7-r8mq-g2x9 (extraction follows
+  # destination symlinks; 0.6.1 rejects writes through them).
+  adm-zip@<0.6.1: ">=0.6.1"
   # GHSA-28wg-ghj8-5hjv, GHSA-2v37-7h3g-55p8. Scoped at 3.x and up: nanoid
   # resolves several majors in this tree and a bare key would coerce them all.
   nanoid@<3.3.16: ">=3.3.16"
