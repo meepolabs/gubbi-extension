@@ -2,6 +2,15 @@
 # file, which is the sole home for these settings. Omitting `packages:` keeps
 # the root as the only package.
 
+# Supply-chain delay: pnpm refuses versions published less than 14 days ago
+# (minutes), including transitive deps that Renovate's own release-age check
+# never sees. To ship an urgent security fix sooner, temporarily list the
+# package (or an exact `name@version`) under `minimumReleaseAgeExclude` and
+# remove the entry once the version is 14 days old. Packages released together
+# with the fix and pinned exactly by it (often a whole scope) must be excluded
+# too, e.g. `typescript-eslint` plus `@typescript-eslint/*`.
+minimumReleaseAge: 20160
+
 # Every build script in the tree must be listed. pnpm 11 defaults
 # `strictDepBuilds` to true, so an unlisted one fails the install rather than
 # warning.
