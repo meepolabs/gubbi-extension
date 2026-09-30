@@ -55,35 +55,17 @@ overrides:
   nanoid@<3.3.16: ">=3.3.16"
   # GHSA-fxqj-rqcc-2cmp, GHSA-r28c-9q8g-f849.
   postcss@<8.5.23: ">=8.5.23"
-  # brace-expansion is deliberately NOT overridden. Verified by experiment
-  # rather than reasoned about: a `<1.1.16` floor coerces the 1.x copy that
-  # `minimatch@3.1.5` resolves (multimatch <- web-ext-run <- wxt) up to 5.x,
-  # and minimatch then dies with `TypeError: expand is not a function` --
-  # 5.x exports a NAMED `expand` where the 1.x API it was written against
-  # exported a default. A `<5.0.9` floor breaks the same consumer the same
-  # way. Confirmed by requiring minimatch directly with and without the
-  # override; the sibling web repo hit this from the other direction and its
-  # own comment says a second per-major floor does not fix it either.
-  # Residual: GHSA-3jxr-9vmj-r5cp, GHSA-mh99-v99m-4gvg, GHSA-rgw5-rvv9-x895 --
-  # ReDoS in a glob matcher reached only by dev tooling, matching patterns
-  # from our own config rather than untrusted input. Revisit when wxt drops
-  # web-ext-run (its multimatch dep is the only thing holding minimatch 3.x).
-  # Same advisories on the 5.x line, reached via eslint > minimatch. Scoped
-  # separately rather than with a bare key: coercing every major to one floor
-  # is what broke the sibling web repo (5.x exports a named `expand` where 2.x
-  # exported a default). minimatch already declares `^5.0.8`, so this only
-  # un-sticks a stale resolution rather than forcing an incompatible major.
-  # NOT overridden on the 5.x line, and that is deliberate. `minimatch@3.1.5`
-  # (pulled by multimatch <- web-ext-run <- wxt) DECLARES `^1.1.7` but resolves
-  # a 5.x copy; coercing that copy to >=5.0.9 breaks it with
-  # `TypeError: expand is not a function`, because 5.x exports a named `expand`
-  # where the 1.x API it was written against exported a default. Verified here
-  # by requiring minimatch directly after the coercion, not reasoned about --
-  # the sibling web repo hit the same wall from the other direction.
-  # The residual advisories (GHSA-3jxr-9vmj-r5cp, GHSA-mh99-v99m-4gvg,
-  # GHSA-rgw5-rvv9-x895) are ReDoS in a glob matcher reached only by dev
-  # tooling, on patterns from our own config rather than untrusted input.
-  # Revisit when wxt drops web-ext-run's multimatch dependency.
+  # GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7, GHSA-q2hr-2g5m-vwhr (DoS in
+  # brace expansion). Two copies resolve: 1.x via minimatch@3.1.5 (multimatch
+  # <- web-ext-run <- wxt) and 5.x via minimatch 10 (eslint). Each floor is
+  # keyed to one major and its value is capped inside that major, because
+  # coercing across majors breaks minimatch: 5.x exports a named `expand`
+  # where 1.x exported a default, and minimatch@3.1.5 then throws
+  # `TypeError: expand is not a function`. Verified by requiring each
+  # minimatch copy after the relock. Both copies are dev tooling only; neither
+  # ships in the packaged extension.
+  brace-expansion@1: ">=1.1.21 <2"
+  brace-expansion@5: ">=5.0.12 <6"
   # GHSA-g7r4-m6w7-qqqr (low; dev server request handling).
   esbuild@<0.28.1: ">=0.28.1"
   # GHSA-w5hq-g745-h8pq (moderate).
