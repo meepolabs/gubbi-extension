@@ -56,15 +56,20 @@ overrides:
   # GHSA-fxqj-rqcc-2cmp, GHSA-r28c-9q8g-f849.
   postcss@<8.5.23: ">=8.5.23"
   # GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7, GHSA-q2hr-2g5m-vwhr (DoS in
-  # brace expansion). Two copies resolve: 1.x via minimatch@3.1.5 (multimatch
-  # <- web-ext-run <- wxt) and 5.x via minimatch 10 (eslint). Each floor is
-  # keyed to one major and its value is capped inside that major, because
-  # coercing across majors breaks minimatch: 5.x exports a named `expand`
-  # where 1.x exported a default, and minimatch@3.1.5 then throws
-  # `TypeError: expand is not a function`. Verified by requiring each
-  # minimatch copy after the relock. Both copies are dev tooling only; neither
-  # ships in the packaged extension.
+  # brace expansion; every major affected). One floor per patched major (1, 2,
+  # 3, 5), each keyed to that major and capped inside it, because coercing
+  # across majors breaks minimatch: 5.x exports a named `expand` where older
+  # majors export a default, and an older minimatch then throws
+  # `TypeError: expand is not a function`. 4.x is deliberately absent: it has
+  # no patched release, so the only floor would be a cross-major jump to 5.x;
+  # a vulnerable 4.x copy fails the osv-scanner job instead, forcing a parent
+  # upgrade. Copies resolving today: 1.x via minimatch@3.1.5 (multimatch <-
+  # web-ext-run <- wxt) and 5.x via minimatch 10 (eslint); the 2.x and 3.x
+  # floors cover copies a future upgrade may pull in. All are dev tooling only;
+  # none ships in the packaged extension.
   brace-expansion@1: ">=1.1.21 <2"
+  brace-expansion@2: ">=2.1.7 <3"
+  brace-expansion@3: ">=3.0.9 <4"
   brace-expansion@5: ">=5.0.12 <6"
   # GHSA-g7r4-m6w7-qqqr (low; dev server request handling).
   esbuild@<0.28.1: ">=0.28.1"
