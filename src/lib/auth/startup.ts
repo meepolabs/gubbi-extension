@@ -1,10 +1,5 @@
 import { logger } from "../logger";
-import {
-  getAuthBlob,
-  getRefreshState,
-  setAuthBlob,
-  clearRefreshState,
-} from "../storage";
+import { getAuthBlob, getRefreshState, setAuthBlob, clearRefreshState } from "../storage";
 
 // Startup recovery: the ambiguous-refresh detector. Call ONCE at service-worker
 // startup, before any refresh can run.

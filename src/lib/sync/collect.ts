@@ -36,7 +36,10 @@ export interface NormalizeBatchResult {
 // Pure: runs each raw conversation through the platform normalizer, dropping
 // (and counting) any that fail. Separated from the messaging layer so it is
 // unit-testable without chrome.* or the network.
-export function normalizeBatch(platform: AdapterPlatform, raws: readonly unknown[]): NormalizeBatchResult {
+export function normalizeBatch(
+  platform: AdapterPlatform,
+  raws: readonly unknown[],
+): NormalizeBatchResult {
   const normalizer = NORMALIZERS[platform];
   const conversations: ConversationPayload[] = [];
   let skipped = 0;
@@ -73,7 +76,11 @@ export function assembleIngestRequest(
 function isListResultMessage(value: unknown): value is ListResultMessage {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as { type?: unknown; result?: unknown };
-  return candidate.type === "LIST_RESULT" && typeof candidate.result === "object" && candidate.result !== null;
+  return (
+    candidate.type === "LIST_RESULT" &&
+    typeof candidate.result === "object" &&
+    candidate.result !== null
+  );
 }
 
 function isConversationResultMessage(value: unknown): value is ConversationResultMessage {

@@ -76,7 +76,10 @@
         "id": "msg-assistant-code",
         "author": { "role": "assistant", "name": null, "metadata": {} },
         "create_time": 1717603320.0,
-        "content": { "content_type": "code", "parts": ["def sort_nums(xs):\n    return sorted(xs)"] },
+        "content": {
+          "content_type": "code",
+          "parts": ["def sort_nums(xs):\n    return sorted(xs)"]
+        },
         "status": "finished_successfully",
         "end_turn": true,
         "recipient": "all"

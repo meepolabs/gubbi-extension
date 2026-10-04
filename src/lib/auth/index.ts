@@ -23,15 +23,15 @@ export { ReconnectRequiredError } from "./errors";
 // CSRF / tampered redirect); user_cancelled is benign (closed the window or
 // denied); exchange_failed is a rejected grant (e.g. expired code); network is
 // any transport-level failure. The popup maps these to user-facing copy.
-export type PairFailureReason =
-  | "state_mismatch"
-  | "user_cancelled"
-  | "exchange_failed"
-  | "network";
+export type PairFailureReason = "state_mismatch" | "user_cancelled" | "exchange_failed" | "network";
 
 export type PairResult = { ok: true } | { ok: false; reason: PairFailureReason };
 
-function authBlobFrom(accessToken: string, refreshToken: string, expiresInSeconds: number): AuthBlob {
+function authBlobFrom(
+  accessToken: string,
+  refreshToken: string,
+  expiresInSeconds: number,
+): AuthBlob {
   const now = Date.now();
   return {
     version: 1,

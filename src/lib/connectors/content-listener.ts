@@ -30,9 +30,7 @@ export function makeContentMessageListener(
     if (message.type === "LIST_REQUEST" && message.platform === platform) {
       fetcher
         .listConversationsRaw(message.since)
-        .then((raw) =>
-          sendResponse({ type: "LIST_RESULT", platform, result: toListOutcome(raw) }),
-        )
+        .then((raw) => sendResponse({ type: "LIST_RESULT", platform, result: toListOutcome(raw) }))
         .catch((e: unknown) => {
           logger.error("list request failed", { platform, error: String(e) });
           sendResponse({

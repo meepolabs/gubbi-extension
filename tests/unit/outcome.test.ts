@@ -8,9 +8,7 @@ import type { FailureReason } from "../../src/lib/messages";
 // and the per-platform fetch.ts). The mapper classifies those stable markers
 // into a typed FailureReason; these tests pin each marker to its reason.
 
-const summaries: ConversationSummary[] = [
-  { platform_id: "p1", title: "t", updated_at: null },
-];
+const summaries: ConversationSummary[] = [{ platform_id: "p1", title: "t", updated_at: null }];
 
 describe("toListOutcome", () => {
   it("maps an ok outcome to a success variant", () => {

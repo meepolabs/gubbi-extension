@@ -2,10 +2,7 @@ import { defineBackground } from "wxt/utils/define-background";
 
 import { runStartupRecovery } from "../src/lib/auth";
 import { logger } from "../src/lib/logger";
-import {
-  isExtensionMessage,
-  type StatusResultMessage,
-} from "../src/lib/messages";
+import { isExtensionMessage, type StatusResultMessage } from "../src/lib/messages";
 import type { AdapterPlatform } from "../src/lib/connectors/base";
 import { getSyncStatus, runSync } from "../src/lib/sync/orchestrator";
 
@@ -100,7 +97,12 @@ export default defineBackground({
 
       if (message.type === "SYNC_START") {
         void triggerSync(message.platform);
-        sendResponse({ type: "SYNC_PROGRESS", platform: message.platform ?? "chatgpt", processed: 0, total: 0 });
+        sendResponse({
+          type: "SYNC_PROGRESS",
+          platform: message.platform ?? "chatgpt",
+          processed: 0,
+          total: 0,
+        });
         return false;
       }
 

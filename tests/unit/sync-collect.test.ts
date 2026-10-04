@@ -118,10 +118,18 @@ function failedConversation(
 }
 
 function okConversation(conversationId: string, raw: unknown): ConversationResultMessage {
-  return { type: "CONVERSATION_RESULT", platform: "chatgpt", conversationId, result: { ok: true, raw } };
+  return {
+    type: "CONVERSATION_RESULT",
+    platform: "chatgpt",
+    conversationId,
+    result: { ok: true, raw },
+  };
 }
 
-function rateLimitedConversation(conversationId: string, retryAfterSeconds?: number): ConversationResultMessage {
+function rateLimitedConversation(
+  conversationId: string,
+  retryAfterSeconds?: number,
+): ConversationResultMessage {
   return {
     type: "CONVERSATION_RESULT",
     platform: "chatgpt",
@@ -135,10 +143,12 @@ function rateLimitedConversation(conversationId: string, retryAfterSeconds?: num
 
 // Returns the spy so each test can assert how many CONVERSATION_REQUESTs were issued.
 function stubTab(responses: RoutedResponses): ReturnType<typeof vi.fn> {
-  const sendMessage = vi.fn(async (_tabId: number, message: ListRequestMessage | ConversationRequestMessage) => {
-    if (message.type === "LIST_REQUEST") return responses.list;
-    return responses.conversationById[message.conversationId];
-  });
+  const sendMessage = vi.fn(
+    async (_tabId: number, message: ListRequestMessage | ConversationRequestMessage) => {
+      if (message.type === "LIST_REQUEST") return responses.list;
+      return responses.conversationById[message.conversationId];
+    },
+  );
   vi.stubGlobal("chrome", { tabs: { sendMessage } });
   return sendMessage;
 }
@@ -164,7 +174,10 @@ describe("collectFromTab", () => {
       list: okList(["c1", "c2"]),
       conversationById: {
         c1: okConversation("c1", structuredClone(rawChatGpt)),
-        c2: okConversation("c2", { ...structuredClone(rawChatGpt), conversation_id: "chatgpt-conv-0002" }),
+        c2: okConversation("c2", {
+          ...structuredClone(rawChatGpt),
+          conversation_id: "chatgpt-conv-0002",
+        }),
       },
     });
 
@@ -218,7 +231,10 @@ describe("collectFromTab", () => {
       conversationById: {
         c1: okConversation("c1", structuredClone(rawChatGpt)),
         c2: failedConversation("c2", "session_lost"),
-        c3: okConversation("c3", { ...structuredClone(rawChatGpt), conversation_id: "chatgpt-conv-0003" }),
+        c3: okConversation("c3", {
+          ...structuredClone(rawChatGpt),
+          conversation_id: "chatgpt-conv-0003",
+        }),
       },
     });
 
@@ -272,7 +288,10 @@ describe("collectFromTab", () => {
       conversationById: {
         c1: okConversation("c1", structuredClone(rawChatGpt)),
         c2: rateLimitedConversation("c2", 13),
-        c3: okConversation("c3", { ...structuredClone(rawChatGpt), conversation_id: "chatgpt-conv-0003" }),
+        c3: okConversation("c3", {
+          ...structuredClone(rawChatGpt),
+          conversation_id: "chatgpt-conv-0003",
+        }),
       },
     });
 

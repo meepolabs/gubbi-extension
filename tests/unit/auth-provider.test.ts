@@ -47,7 +47,9 @@ describe("getAccessToken", () => {
   it("fast path: returns the cached token with no lock and no token call when >2min away", async () => {
     // Arrange
     const stub = stubChromeStorage();
-    await setAuthBlob(blob({ accessTokenExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }));
+    await setAuthBlob(
+      blob({ accessTokenExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString() }),
+    );
 
     // Act
     const token = await getAccessToken();
@@ -98,7 +100,9 @@ describe("forceRefresh", () => {
   it("refreshes a still-valid token, ignoring the 2-min margin", async () => {
     // Arrange: token is far from expiry, so getAccessToken would NOT refresh.
     stubChromeStorage();
-    await setAuthBlob(blob({ accessTokenExpiresAt: new Date(Date.now() + 60 * 60_000).toISOString() }));
+    await setAuthBlob(
+      blob({ accessTokenExpiresAt: new Date(Date.now() + 60 * 60_000).toISOString() }),
+    );
     vi.mocked(guardedFetch).mockResolvedValue(rotatedResponse());
 
     // Act

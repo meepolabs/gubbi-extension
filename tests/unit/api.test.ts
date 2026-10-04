@@ -3,7 +3,10 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { IngestConversationRequest, IngestConversationResponse } from "../../src/lib/schema/ingest";
+import type {
+  IngestConversationRequest,
+  IngestConversationResponse,
+} from "../../src/lib/schema/ingest";
 import type { TokenProvider } from "../../src/lib/token-provider";
 
 // guardedFetch is the single egress chokepoint; the api client calls it for all
@@ -130,7 +133,9 @@ describe("uploadConversations", () => {
 
   it("parses a delta-seconds Retry-After on 429", async () => {
     // Arrange
-    fetchMock.mockResolvedValue(new Response("", { status: 429, headers: { "retry-after": "120" } }));
+    fetchMock.mockResolvedValue(
+      new Response("", { status: 429, headers: { "retry-after": "120" } }),
+    );
 
     // Act
     const outcome = await uploadConversations(requestWith(1), fakeProvider());
@@ -146,7 +151,9 @@ describe("uploadConversations", () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const future = new Date(now + 30_000).toUTCString();
-    fetchMock.mockResolvedValue(new Response("", { status: 429, headers: { "retry-after": future } }));
+    fetchMock.mockResolvedValue(
+      new Response("", { status: 429, headers: { "retry-after": future } }),
+    );
 
     // Act
     const outcome = await uploadConversations(requestWith(1), fakeProvider());

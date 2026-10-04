@@ -37,11 +37,7 @@ describe("content message listener default case", () => {
     const sendResponse = vi.fn();
 
     // Act
-    const handled = listener(
-      { type: "STATUS_REQUEST" },
-      undefined,
-      sendResponse as never,
-    );
+    const handled = listener({ type: "STATUS_REQUEST" }, undefined, sendResponse as never);
 
     // Assert
     expect(handled).toBe(false);

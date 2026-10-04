@@ -53,10 +53,7 @@ export interface EventfulStorageStub {
 // waits on change events (e.g. waitForLockReleased).
 export function stubChromeStorageWithEvents(): EventfulStorageStub {
   const store: Record<string, unknown> = {};
-  type Listener = (
-    changes: Record<string, chrome.storage.StorageChange>,
-    areaName: string,
-  ) => void;
+  type Listener = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => void;
   const listeners = new Set<Listener>();
 
   const dispatch = (key: string, oldValue: unknown, newValue: unknown): void => {

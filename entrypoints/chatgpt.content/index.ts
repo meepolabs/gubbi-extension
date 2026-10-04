@@ -18,6 +18,8 @@ export default defineContentScript({
   runAt: "document_idle",
   world: "ISOLATED",
   main() {
-    chrome.runtime.onMessage.addListener(makeContentMessageListener("chatgpt", new ChatGptFetcher()));
+    chrome.runtime.onMessage.addListener(
+      makeContentMessageListener("chatgpt", new ChatGptFetcher()),
+    );
   },
 });

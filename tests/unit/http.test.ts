@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  failureFromResponse,
-  fetchJson,
-  parseRetryAfter,
-} from "../../src/lib/connectors/http";
+import { failureFromResponse, fetchJson, parseRetryAfter } from "../../src/lib/connectors/http";
 
 afterEach(() => {
   vi.restoreAllMocks();

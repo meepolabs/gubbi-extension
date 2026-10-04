@@ -1,10 +1,5 @@
 import type { ConversationSummary, RawFetchOutcome } from "./base";
-import type {
-  ListOutcome,
-  ConversationOutcome,
-  FailureReason,
-  OutcomeFailure,
-} from "../messages";
+import type { ListOutcome, ConversationOutcome, FailureReason, OutcomeFailure } from "../messages";
 import { HTTP_FORBIDDEN, HTTP_UNAUTHORIZED } from "../net/http-constants";
 
 // Content-safe mappers from a RawFetchOutcome to the message-envelope outcome

@@ -54,8 +54,15 @@ describe("unpair", () => {
       redirectUri: "https://example.com",
       startedAt: new Date().toISOString(),
     });
-    await setRefreshState({ ownerId: "x", authVersionBefore: 1, startedAt: new Date().toISOString() });
-    await setPauseState("chatgpt", { pausedUntil: new Date().toISOString(), reason: "rate_limited" });
+    await setRefreshState({
+      ownerId: "x",
+      authVersionBefore: 1,
+      startedAt: new Date().toISOString(),
+    });
+    await setPauseState("chatgpt", {
+      pausedUntil: new Date().toISOString(),
+      reason: "rate_limited",
+    });
     await setPauseState("claude", { pausedUntil: new Date().toISOString(), reason: "transient" });
     vi.mocked(guardedFetch).mockResolvedValue(new Response(null, { status: 200 }));
 

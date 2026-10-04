@@ -278,7 +278,11 @@ describe("sync event ring buffer", () => {
     // Arrange
     const store: Record<string, unknown> = {};
     stubPersistentStorage(store);
-    const entry: SyncEvent = { at: "2026-06-06T12:00:00Z", kind: "run_started", platform: "chatgpt" };
+    const entry: SyncEvent = {
+      at: "2026-06-06T12:00:00Z",
+      kind: "run_started",
+      platform: "chatgpt",
+    };
 
     // Act
     await appendSyncEvent(entry);

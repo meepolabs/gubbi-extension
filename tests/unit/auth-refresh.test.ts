@@ -11,12 +11,7 @@ vi.mock("../../src/lib/net/fetch", () => ({ guardedFetch: vi.fn() }));
 import { guardedFetch } from "../../src/lib/net/fetch";
 import { refreshWithinLock } from "../../src/lib/auth/refresh";
 import { ReconnectRequiredError } from "../../src/lib/auth/errors";
-import {
-  getAuthBlob,
-  getRefreshState,
-  setAuthBlob,
-  type AuthBlob,
-} from "../../src/lib/storage";
+import { getAuthBlob, getRefreshState, setAuthBlob, type AuthBlob } from "../../src/lib/storage";
 import { stubChromeStorage } from "../helpers/chrome-stub";
 
 const AUTH_BLOB_KEY = "gubbi:authBlob";
@@ -109,7 +104,12 @@ describe("refreshWithinLock (rotation ordering)", () => {
     // Assert: returned the new access token and persisted the rotated blob.
     expect(token).toBe("at_new");
     const blob = await getAuthBlob();
-    expect(blob).toMatchObject({ version: 4, accessToken: "at_new", refreshToken: "rt_new", status: "ok" });
+    expect(blob).toMatchObject({
+      version: 4,
+      accessToken: "at_new",
+      refreshToken: "rt_new",
+      status: "ok",
+    });
     expect(await getRefreshState()).toBeUndefined();
 
     // Ordering: new authBlob set BEFORE refreshState removed.

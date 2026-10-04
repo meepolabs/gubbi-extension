@@ -41,7 +41,9 @@ function stubChromeCapturing(): ChromeCapture {
     },
     alarms: {
       create: vi.fn(async () => undefined),
-      onAlarm: { addListener: vi.fn((l: (a: { name: string }) => void) => (capture.alarmListener = l)) },
+      onAlarm: {
+        addListener: vi.fn((l: (a: { name: string }) => void) => (capture.alarmListener = l)),
+      },
     },
   };
   vi.stubGlobal("chrome", chromeMock);

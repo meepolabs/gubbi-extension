@@ -1,8 +1,4 @@
-import {
-  LockContendedError,
-  waitForLockReleased,
-  withStorageLock,
-} from "../locks";
+import { LockContendedError, waitForLockReleased, withStorageLock } from "../locks";
 import { getAuthBlob, AUTH_LOCK_KEY, type AuthBlob } from "../storage";
 import { ReconnectRequiredError } from "./errors";
 import { refreshWithinLock, REFRESH_LOCK_TTL_MS } from "./refresh";
@@ -23,7 +19,9 @@ const FRESH_MARGIN_MS = 2 * 60 * 1000;
 // giving up and re-attempting the acquisition itself.
 const LOCK_WAIT_TIMEOUT_MS = 30_000;
 
-function isReconnectRequired(blob: AuthBlob | undefined): blob is undefined | (AuthBlob & { status: "reconnect_required" }) {
+function isReconnectRequired(
+  blob: AuthBlob | undefined,
+): blob is undefined | (AuthBlob & { status: "reconnect_required" }) {
   return blob === undefined || blob.status === "reconnect_required";
 }
 

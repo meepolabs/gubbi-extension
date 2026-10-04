@@ -1,9 +1,5 @@
 import type { ConversationNormalizer, NormalizedConversation } from "../base";
-import {
-  ConversationPayloadSchema,
-  type MessagePayload,
-  type Role,
-} from "../../schema/ingest";
+import { ConversationPayloadSchema, type MessagePayload, type Role } from "../../schema/ingest";
 
 // ChatGPT raw -> ConversationPayload normalizer. BACKGROUND/LIB ONLY -- it
 // imports the Zod schema runtime and must never be reached from a content

@@ -46,7 +46,8 @@ describe("ChatGptFetcher", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
       const url = typeof input === "string" ? input : input.toString();
       spy(url, init);
-      if (url.includes("/api/auth/session")) return Promise.resolve(jsonResponse({ accessToken: "tok-123" }));
+      if (url.includes("/api/auth/session"))
+        return Promise.resolve(jsonResponse({ accessToken: "tok-123" }));
       return Promise.resolve(jsonResponse({ items: [] }));
     });
 
@@ -54,7 +55,9 @@ describe("ChatGptFetcher", () => {
     await new ChatGptFetcher().listConversationsRaw();
 
     // Assert
-    const listCall = spy.mock.calls.find(([url]) => String(url).includes("/backend-api/conversations"));
+    const listCall = spy.mock.calls.find(([url]) =>
+      String(url).includes("/backend-api/conversations"),
+    );
     expect(listCall).toBeDefined();
     const headers = (listCall![1] as RequestInit).headers as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer tok-123");
@@ -89,7 +92,10 @@ describe("ChatGptFetcher", () => {
   it("surfaces a rate_limited outcome from the session call", async () => {
     // Arrange
     routeFetch([
-      ["/api/auth/session", () => new Response(null, { status: 429, headers: { "retry-after": "7" } })],
+      [
+        "/api/auth/session",
+        () => new Response(null, { status: 429, headers: { "retry-after": "7" } }),
+      ],
     ]);
 
     // Act
@@ -155,7 +161,9 @@ describe("ClaudeFetcher", () => {
 
   it("reports no active chat session when only a non-chat (api) org exists", async () => {
     // Arrange
-    routeFetch([["/api/organizations", () => jsonResponse([{ uuid: "org-api", capabilities: ["api"] }])]]);
+    routeFetch([
+      ["/api/organizations", () => jsonResponse([{ uuid: "org-api", capabilities: ["api"] }])],
+    ]);
 
     // Act
     const active = await new ClaudeFetcher().isSessionActive();

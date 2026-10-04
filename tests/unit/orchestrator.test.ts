@@ -54,7 +54,9 @@ function requestOf(
   return { source: "extension_chatgpt", conversations };
 }
 
-function okResponse(overrides: Partial<IngestConversationResponse> = {}): IngestConversationResponse {
+function okResponse(
+  overrides: Partial<IngestConversationResponse> = {},
+): IngestConversationResponse {
   return {
     conversations_saved: 1,
     conversations_skipped_dedupe: 0,
@@ -147,12 +149,15 @@ function makeDeps(overrides: Partial<RunSyncDeps> = {}): FakeDepsBundle {
 function cursorOf(store: Record<string, unknown>, platform: AdapterPlatform): unknown {
   return store[`gubbi:cursor:${platform}`];
 }
-function countersOf(store: Record<string, unknown>): { conversations_uploaded: number } | undefined {
+function countersOf(
+  store: Record<string, unknown>,
+): { conversations_uploaded: number } | undefined {
   return store["gubbi:counters"] as { conversations_uploaded: number } | undefined;
 }
-function pauseOf(store: Record<string, unknown>, platform: AdapterPlatform):
-  | { reason: string; pausedUntil: string }
-  | undefined {
+function pauseOf(
+  store: Record<string, unknown>,
+  platform: AdapterPlatform,
+): { reason: string; pausedUntil: string } | undefined {
   return store[`gubbi:pauseState:${platform}`] as
     | { reason: string; pausedUntil: string }
     | undefined;

@@ -16,3 +16,6 @@ src/assets
 
 # License text is verbatim upstream; do not reformat
 LICENSE
+
+# Hand-maintained code map: table padding would make every edit a full-row diff
+CODEMAP.md

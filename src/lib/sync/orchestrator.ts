@@ -146,10 +146,7 @@ const realDeps: RunSyncDeps = {
 // validated zod layer (getStatus/setStatus) like every other stored value, so an
 // unknown persisted value degrades to "idle" rather than being trusted raw.
 
-export function setSyncStatus(
-  platform: AdapterPlatform,
-  state: SyncStatusState,
-): Promise<void> {
+export function setSyncStatus(platform: AdapterPlatform, state: SyncStatusState): Promise<void> {
   return setStatus(platform, state);
 }
 
@@ -338,10 +335,7 @@ async function uploadBatches(
   return { kind: "complete" };
 }
 
-type SingleBatchResult =
-  | { kind: "continue" }
-  | { kind: "paused" }
-  | { kind: "reconnect" };
+type SingleBatchResult = { kind: "continue" } | { kind: "paused" } | { kind: "reconnect" };
 
 async function uploadOneBatch(
   deps: RunSyncDeps,
@@ -441,10 +435,7 @@ async function applyUploadOutcome(
   }
 }
 
-async function reconnect(
-  deps: RunSyncDeps,
-  platform: AdapterPlatform,
-): Promise<SingleBatchResult> {
+async function reconnect(deps: RunSyncDeps, platform: AdapterPlatform): Promise<SingleBatchResult> {
   await deps.setStatus(platform, "reconnect_required");
   await appendSyncEvent({ at: isoFromMs(deps.now()), kind: EVENT.reconnect, platform });
   return { kind: "reconnect" };
@@ -452,10 +443,7 @@ async function reconnect(
 
 // ---- Per-platform sweep ------------------------------------------------------
 
-async function syncPlatform(
-  deps: RunSyncDeps,
-  platform: AdapterPlatform,
-): Promise<PlatformResult> {
+async function syncPlatform(deps: RunSyncDeps, platform: AdapterPlatform): Promise<PlatformResult> {
   // Honor an active backoff window: skip without collecting.
   const paused = await getPauseState(platform);
   if (paused !== undefined && Date.parse(paused.pausedUntil) > deps.now()) {
@@ -494,14 +482,24 @@ async function consumeCollectOutcome(
       return "continue";
     }
     const consecutive = await bumpTransientCount(platform);
-    await pause(deps, platform, "transient", deps.now() + transientBackoffMs(consecutive, deps.random));
+    await pause(
+      deps,
+      platform,
+      "transient",
+      deps.now() + transientBackoffMs(consecutive, deps.random),
+    );
     return "continue";
   }
 
   if (outcome.status === "rate_limited") {
     const upload = await uploadBatches(deps, platform, outcome.request);
     if (upload.kind === "reconnect") return "abort_run";
-    await pause(deps, platform, "rate_limited", deps.now() + rateLimitBackoffMs(outcome.retryAfterSeconds));
+    await pause(
+      deps,
+      platform,
+      "rate_limited",
+      deps.now() + rateLimitBackoffMs(outcome.retryAfterSeconds),
+    );
     return "continue";
   }
 
@@ -573,8 +571,7 @@ export interface RunSyncOptions {
 // short-circuits (LockContendedError) so two wakes never double-sync.
 export async function runSync(options: RunSyncOptions = {}): Promise<void> {
   const deps: RunSyncDeps = { ...realDeps, ...(options.deps ?? {}) };
-  const platforms =
-    options.platform !== undefined ? [options.platform] : ENABLED_PLATFORMS;
+  const platforms = options.platform !== undefined ? [options.platform] : ENABLED_PLATFORMS;
 
   try {
     await withStorageLock(SYNC_LEASE_KEY, SYNC_LEASE_TTL_MS, async () => {

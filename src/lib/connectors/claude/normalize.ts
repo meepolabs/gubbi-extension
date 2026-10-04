@@ -1,9 +1,5 @@
 import type { ConversationNormalizer, NormalizedConversation } from "../base";
-import {
-  ConversationPayloadSchema,
-  type MessagePayload,
-  type Role,
-} from "../../schema/ingest";
+import { ConversationPayloadSchema, type MessagePayload, type Role } from "../../schema/ingest";
 
 // Claude raw -> ConversationPayload normalizer. BACKGROUND/LIB ONLY -- imports
 // the Zod schema runtime; never reached from a content script. Returns null

@@ -25,7 +25,11 @@ describe("isExtensionMessage", () => {
 
   it("accepts a CONVERSATION_REQUEST message", () => {
     expect(
-      isExtensionMessage({ type: "CONVERSATION_REQUEST", platform: "claude", conversationId: "c1" }),
+      isExtensionMessage({
+        type: "CONVERSATION_REQUEST",
+        platform: "claude",
+        conversationId: "c1",
+      }),
     ).toBe(true);
   });
 
@@ -45,9 +49,9 @@ describe("isExtensionMessage", () => {
   });
 
   it("accepts a STATUS_RESULT message", () => {
-    expect(
-      isExtensionMessage({ type: "STATUS_RESULT", platform: "chatgpt", state: "idle" }),
-    ).toBe(true);
+    expect(isExtensionMessage({ type: "STATUS_RESULT", platform: "chatgpt", state: "idle" })).toBe(
+      true,
+    );
   });
 
   it("rejects an unknown message type", () => {

@@ -18,11 +18,7 @@ vi.mock("../../src/lib/net/fetch", () => ({
 
 import { pair } from "../../src/lib/auth";
 import { guardedFetch } from "../../src/lib/net/fetch";
-import {
-  clearPendingAuthFlow,
-  setAuthBlob,
-  setPendingAuthFlow,
-} from "../../src/lib/storage";
+import { clearPendingAuthFlow, setAuthBlob, setPendingAuthFlow } from "../../src/lib/storage";
 
 const REDIRECT_URI = "https://abcdef.chromiumapp.org/";
 
