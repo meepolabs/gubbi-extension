@@ -17,9 +17,11 @@
     "check": "tsc -p tsconfig.json && tsc -p scripts/tsconfig.json",
     "lint": "eslint .",
     "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "vitest run",
     "postinstall": "wxt prepare",
-    "verify": "pnpm check && pnpm lint && pnpm test && pnpm build && node scripts/verify-manifest.mjs"
+    "check-required-needs": "node --test scripts/verify-required-needs.test.mjs && node scripts/verify-required-needs.mjs",
+    "verify": "pnpm format:check && pnpm check-required-needs && pnpm check && pnpm lint && pnpm test && pnpm build && node scripts/verify-manifest.mjs"
   },
   "dependencies": {
     "@sentry/browser": "9.47.1",

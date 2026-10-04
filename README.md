@@ -142,6 +142,17 @@ pip install pre-commit   # or: brew install pre-commit
 pre-commit install
 ```
 
+CI (`.github/workflows/ci.yml`) runs `pnpm verify` -- a whole-tree format
+check (`pnpm format:check`, i.e. `prettier --check .`), the `required.needs`
+completeness check, type-check, lint, tests, build, and the manifest gate --
+plus the secret scan. A terminal `required` job succeeds only when every one
+of those jobs succeeded; it is the single check branch protection requires.
+Run `pnpm format` to fix formatting before pushing. Any new CI job must be
+added to `required.needs`: `scripts/verify-required-needs.mjs` fails
+otherwise, and runs inside the `required` job itself as well as in
+`pnpm verify`. The dependency vulnerability scan is advisory and is not part
+of `required`.
+
 Secret scanning (`gitleaks`, config in `.gitleaks.toml`) also runs in CI on
 every push and pull request. Dependency updates are managed by Renovate
 (`renovate.json`): weekly, grouped, and never auto-merged -- this project
