@@ -1,0 +1,46 @@
+name: dependency-scan
+
+# Advisory: a finding turns this workflow red but blocks no merge. A newly
+# published advisory against an unchanged dependency is not a defect in the
+# change under review; Renovate security PRs fix findings.
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # One tool covers this repo's pnpm lockfile and the Python repos' poetry.lock
+  # alike, so the scan reads the same everywhere.
+  #
+  # Why the container image and not google/osv-scanner-action: that action
+  # ships REUSABLE WORKFLOWS whose `upload-sarif` input defaults to true, which
+  # needs `security-events: write` plus GitHub code scanning -- not available
+  # for private repos on a free plan. Running the image keeps one pattern that
+  # works on public and private repos alike, and keeps this job on
+  # `contents: read`.
+  #
+  # Pinned by the multi-arch index digest, so a re-pushed tag cannot change
+  # what runs; Renovate updates the tag and digest together.
+  osv-scan:
+    name: dependency vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # `-r .` walks the tree and picks up every lockfile it recognises.
+      # Exits non-zero on a finding.
+      - name: Scan lockfiles
+        uses: docker://ghcr.io/google/osv-scanner:v2.5.1@sha256:8108ae94eadea5a02c9bec6e646909d5b790b44bd62d7f5b7f0b1d6d0ffc7734
+        with:
+          args: scan source -r .
