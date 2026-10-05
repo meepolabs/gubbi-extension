@@ -1,4 +1,4 @@
-# gitleaks config -- adopted from meepo-conventions baseline.
+# gitleaks config.
 #
 # Inherits the default ruleset and adds project-specific allowlist
 # patterns for WXT generated artifacts. Lockfiles are already skipped by

@@ -1,6 +1,4 @@
-# Secret scanning -- adopted from meepo-conventions baseline. Identical in
-# every repo on purpose: one workflow name, one trigger set, one action pin,
-# so a reader (or a future audit) does not have to learn a per-repo variant.
+# Secret scanning with gitleaks.
 #
 # Runs on every push, on every PR (called from ci.yml), plus a weekly
 # full-history scan to catch anything historical that slipped past the diff
@@ -30,14 +28,15 @@ on:
   # name), so neither cancels the other.
   workflow_call:
 
-# Cancel redundant runs on the same branch. Keyed on event_name too, so a
-# push never cancels the weekly full-history scan (and vice versa) -- they
-# scan different things and the cron is the only one that sees history.
+# Keyed on event_name, so a push never cancels the weekly full-history scan
+# (and vice versa) -- they scan different things and the cron is the only one
+# that sees history. Push runs are keyed by commit SHA: a group holds at most
+# one pending run and GitHub replaces it when a third arrives, even without
+# cancel-in-progress, so a per-branch group would drop the middle push's scan.
 # Only pull-request runs are cancelled: the newer PR head rescans the same
-# diff, but a cancelled push scan would leave its commits unscanned until
-# the weekly run.
+# diff.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

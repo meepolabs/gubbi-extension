@@ -37,6 +37,7 @@ jobs:
         run: pnpm verify
 
   secret-scan:
+    name: secret scan
     uses: ./.github/workflows/gitleaks.yml
     permissions:
       contents: read
