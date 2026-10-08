@@ -9,10 +9,6 @@ import type { RawFetchOutcome } from "./base";
 // go through the background egress guard (src/lib/net/fetch.ts).
 
 const HTTP_TOO_MANY_REQUESTS = 429;
-const HTTP_UNAUTHORIZED = 401;
-const HTTP_FORBIDDEN = 403;
-
-export { HTTP_UNAUTHORIZED, HTTP_FORBIDDEN };
 
 // Same-origin GET with cookies. Returns the raw Response so callers can inspect
 // status before consuming the body.

@@ -1,9 +1,9 @@
 import type { ConversationPayload, Platform } from "../schema/ingest";
 
 // A normalized conversation is exactly the ingest payload shape. The canonical
-// definitions live in schema/ingest.ts; re-export them here so the connector
+// definition lives in schema/ingest.ts; re-export it here so the connector
 // surface has a single source of truth.
-export type { NormalizedMessage, NormalizedConversation } from "../schema/ingest";
+export type { NormalizedConversation } from "../schema/ingest";
 
 // Supported connector platforms. v2 will extend this union (and the backend
 // ingest source enum) with new platforms; keep AdapterPlatform in sync with the
