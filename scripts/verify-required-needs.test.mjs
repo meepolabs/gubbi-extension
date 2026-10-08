@@ -12,7 +12,12 @@ const CHECKER_SHA256 = "313159a5229289aef3e47c157cfc5a6f8ab8ba611cf63f69ab7ebaad
 describe("checker copy", () => {
   it("is byte-identical to the pinned canonical checker", () => {
     const bytes = readFileSync(new URL("./verify-required-needs.mjs", import.meta.url));
-    assert.equal(createHash("sha256").update(bytes).digest("hex"), CHECKER_SHA256);
+    assert.equal(
+      createHash("sha256").update(bytes).digest("hex"),
+      CHECKER_SHA256,
+      "scripts/verify-required-needs.mjs differs from gubbi-web scripts/check-required-needs.mjs; " +
+        "edit the checker there, copy it here byte for byte, then update CHECKER_SHA256",
+    );
   });
 });
 
