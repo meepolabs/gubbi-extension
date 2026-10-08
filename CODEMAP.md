@@ -45,7 +45,7 @@ the privacy invariant in the README); the build enforces this.
 | `src/lib/net/` | `fetch` -- the single egress chokepoint: a closed host-allowlist, https-only, redirect-blocking fetch wrapper for all extension-context network IO. `http-constants` -- shared HTTP status codes. |
 | `src/lib/schema/` | `ingest` -- the Zod wire schema mirroring the ingest API request/response (the contract boundary). |
 | `src/lib/` (root) | `storage` (typed `chrome.storage.local` wrapper; every blob is schema-validated, corrupt = absent; holds the auth blob, refresh marker, per-platform cursor/pause-state/counters, status, and a content-free event ring buffer), `messages` (the background <-> content <-> popup discriminated-union envelope + guard), `locks` (`withStorageLock`: heartbeated, owner-checked, stale-takeover -- wraps both the auth lock and the sync lease), `token-provider` (the interface the upload client depends on, so it never imports `auth/`), `api` (the typed ingest upload client), `logger`. |
-| `scripts/` | `content-isolation` (in-build Rollup gate: fails if any third-party module is reachable from a content bundle), `verify-manifest` (post-build manifest + egress-allowlist assertions), `verify-required-needs` (asserts the CI `required` job depends on every other CI job). |
+| `scripts/` | `content-isolation` (in-build Rollup gate: fails if any third-party module is reachable from a content bundle), `verify-manifest` (post-build manifest + egress-allowlist assertions), `verify-required-needs` (asserts the CI `required` job depends on every other CI job; byte copy of gubbi-web's checker, pinned by sha256 in its test). |
 
 ## Entry points
 
