@@ -173,6 +173,7 @@ wxt.config.ts             WXT config: manifest fn, imports:false, isolation hook
 scripts/
   content-isolation.ts    in-build Rollup gate: no node_modules in content bundles
   verify-manifest.mjs      post-build manifest + egress-allowlist assertions
+  verify-required-needs.mjs  CI gate: `required` needs every other job (copy of gubbi-web's)
 content-isolation/        committed per-browser wxt-internal allowlist snapshots
 entrypoints/
   background.ts           service worker: startup recovery + sync alarm + message router

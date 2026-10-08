@@ -19,3 +19,6 @@ LICENSE
 
 # Hand-maintained code map: table padding would make every edit a full-row diff
 CODEMAP.md
+
+# Byte copy of another repo's checker, pinned by sha256 in its test; keeps that repo's formatting
+scripts/verify-required-needs.mjs
