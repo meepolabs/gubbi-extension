@@ -22,7 +22,7 @@ import { ConversationPayloadSchema, type MessagePayload, type Role } from "../..
 interface RawNode {
   id?: string;
   message?: RawMessage | null;
-  parent?: string | null;
+  parent?: unknown;
   children?: string[];
 }
 
@@ -43,7 +43,7 @@ interface RawConversation {
   create_time?: number | null;
   update_time?: number | null;
   current_node?: string;
-  mapping?: Record<string, RawNode>;
+  mapping?: Record<string, unknown>;
 }
 
 const MESSAGE_PART_SEPARATOR = "\n";
@@ -82,32 +82,44 @@ function renderTextContent(content: RawContent | null | undefined): string {
     .join(MESSAGE_PART_SEPARATOR);
 }
 
-// Walks from current_node up through parents to the root, returning node ids in
-// chronological (root-first) order. The server appends unseen message ids and
-// never deletes, so a partial path would be permanent: a cycle, a node missing
-// from the mapping, or running past the mapping size returns null instead.
-function activeLeafNodeIds(conv: RawConversation): string[] | null {
-  const mapping = conv.mapping ?? {};
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  const maxHops = Object.keys(mapping).length + 1;
-  let cursor: string | null | undefined = conv.current_node;
-  if (typeof cursor !== "string") return null;
-  while (typeof cursor === "string") {
-    if (seen.has(cursor) || ids.length >= maxHops) return null;
-    const node: RawNode | undefined = Object.prototype.hasOwnProperty.call(mapping, cursor)
-      ? mapping[cursor]
-      : undefined;
-    if (node === undefined) return null;
-    seen.add(cursor);
-    ids.push(cursor);
-    cursor = node.parent;
-  }
-  return ids.reverse();
+interface PathNode {
+  readonly id: string;
+  readonly node: RawNode;
 }
 
-function nodeToMessage(node: RawNode | undefined, nodeId: string): MessagePayload | null {
-  const message = node?.message;
+function isRawNode(value: unknown): value is RawNode {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// Walks from current_node up through parents to the root, returning the nodes in
+// chronological (root-first) order. The server appends unseen message ids and
+// never deletes, so a partial path would be permanent: only an explicit
+// `parent: null` ends the walk. A cycle, a node missing from the mapping or not
+// an object, a parent that is absent or not a string, or running past the
+// mapping size returns null instead.
+function activeLeafPath(conv: RawConversation): PathNode[] | null {
+  const mapping: Record<string, unknown> = conv.mapping ?? {};
+  const path: PathNode[] = [];
+  const seen = new Set<string>();
+  const maxHops = Object.keys(mapping).length + 1;
+  let cursor: unknown = conv.current_node;
+  if (typeof cursor !== "string") return null;
+  while (cursor !== null) {
+    if (typeof cursor !== "string") return null;
+    if (seen.has(cursor) || path.length >= maxHops) return null;
+    const node = Object.prototype.hasOwnProperty.call(mapping, cursor)
+      ? mapping[cursor]
+      : undefined;
+    if (!isRawNode(node)) return null;
+    seen.add(cursor);
+    path.push({ id: cursor, node });
+    cursor = node.parent;
+  }
+  return path.reverse();
+}
+
+function nodeToMessage(node: RawNode, nodeId: string): MessagePayload | null {
+  const message = node.message;
   if (!message) return null;
   const role = mapRole(message.author?.role);
   if (role === null) return null;
@@ -120,12 +132,11 @@ function nodeToMessage(node: RawNode | undefined, nodeId: string): MessagePayloa
 }
 
 function collectMessages(conv: RawConversation): MessagePayload[] | null {
-  const mapping = conv.mapping ?? {};
-  const nodeIds = activeLeafNodeIds(conv);
-  if (nodeIds === null) return null;
+  const path = activeLeafPath(conv);
+  if (path === null) return null;
   const messages: MessagePayload[] = [];
-  for (const id of nodeIds) {
-    const message = nodeToMessage(mapping[id], id);
+  for (const { id, node } of path) {
+    const message = nodeToMessage(node, id);
     if (message !== null) messages.push(message);
   }
   return messages;

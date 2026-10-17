@@ -228,6 +228,16 @@ function watermarkOf(conversation: ConversationPayload): string {
   return conversation.updated_at ?? conversation.created_at;
 }
 
+const HAS_ZONE_DESIGNATOR = /(?:[zZ]|[+-]\d{2}:\d{2})$/;
+
+// Watermarks may carry differing UTC offsets, so text order is not time order.
+// A timestamp with no zone designator is UTC (as the backend reads it), whereas
+// Date.parse would read it as local time.
+function watermarkMs(conversation: ConversationPayload): number {
+  const wm = watermarkOf(conversation);
+  return Date.parse(HAS_ZONE_DESIGNATOR.test(wm) ? wm : `${wm}Z`);
+}
+
 // The effective `since` passed to collect: the stored cursor rewound by
 // CURSOR_REWIND_MS (so same-second updates are not skipped), or undefined on a
 // first run with no cursor yet.
@@ -258,9 +268,7 @@ interface BatchPlan {
 // the growing batch; this equals serializeRequest of the batch because
 // JSON.stringify without indentation joins array items with a single comma.
 function toBatches(request: IngestConversationRequest): BatchPlan {
-  const sorted = [...request.conversations].sort((a, b) =>
-    watermarkOf(a) < watermarkOf(b) ? -1 : watermarkOf(a) > watermarkOf(b) ? 1 : 0,
-  );
+  const sorted = [...request.conversations].sort((a, b) => watermarkMs(a) - watermarkMs(b));
   const envelopeBytes = utf8Bytes(serializeRequest({ source: request.source, conversations: [] }));
   const batches: IngestConversationRequest[] = [];
   let droppedCount = 0;
@@ -309,12 +317,11 @@ async function recordDroppedOversize(
 }
 
 function maxWatermark(batch: IngestConversationRequest): string | undefined {
-  let max: string | undefined;
+  let max: ConversationPayload | undefined;
   for (const conversation of batch.conversations) {
-    const wm = watermarkOf(conversation);
-    if (max === undefined || wm > max) max = wm;
+    if (max === undefined || watermarkMs(conversation) > watermarkMs(max)) max = conversation;
   }
-  return max;
+  return max === undefined ? undefined : watermarkOf(max);
 }
 
 // Cursor + counters advance TOGETHER after a 200 so a crash between the two
@@ -548,6 +555,7 @@ async function consumeCollectOutcome(
     // remainder -- commitBatch only moves it to the partial batch's watermark.
     const upload = await uploadBatches(deps, platform, outcome.request);
     if (upload.kind === "reconnect") return "abort_run";
+    if (upload.kind === "paused") return "continue";
     if (outcome.reason === "session_lost") {
       await pause(deps, platform, "session_lost", deps.now() + DEFAULT_RATE_LIMIT_BACKOFF_MS);
       return "continue";
@@ -565,6 +573,7 @@ async function consumeCollectOutcome(
   if (outcome.status === "rate_limited") {
     const upload = await uploadBatches(deps, platform, outcome.request);
     if (upload.kind === "reconnect") return "abort_run";
+    if (upload.kind === "paused") return "continue";
     await pause(
       deps,
       platform,

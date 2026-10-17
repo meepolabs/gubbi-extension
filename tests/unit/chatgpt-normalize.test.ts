@@ -183,23 +183,43 @@ describe("ChatGptNormalizer", () => {
     ]);
   });
 
+  type RawMapping = Record<string, Record<string, unknown> | null>;
+
   it.each([
     {
       name: "cycle in the parent chain",
-      mutate: (mapping: Record<string, { parent?: string | null }>) => {
+      mutate: (mapping: RawMapping) => {
         mapping["node-system"]!.parent = "node-assistant-final";
       },
     },
     {
       name: "parent node missing from the mapping",
-      mutate: (mapping: Record<string, { parent?: string | null }>) => {
+      mutate: (mapping: RawMapping) => {
         mapping["node-user-1"]!.parent = "node-not-in-mapping";
+      },
+    },
+    {
+      name: "a null node on the path",
+      mutate: (mapping: RawMapping) => {
+        mapping["node-user-1"] = null;
+      },
+    },
+    {
+      name: "a mid-path node with no parent field",
+      mutate: (mapping: RawMapping) => {
+        delete mapping["node-user-1"]!.parent;
+      },
+    },
+    {
+      name: "a mid-path node whose parent is a number",
+      mutate: (mapping: RawMapping) => {
+        mapping["node-user-1"]!.parent = 7;
       },
     },
   ])("returns null instead of a partial path on $name", ({ mutate }) => {
     // Arrange
     const raw = cloneRaw();
-    mutate(raw.mapping as Record<string, { parent?: string | null }>);
+    mutate(raw.mapping as RawMapping);
 
     // Act
     const result = normalizer.normalizeConversation(raw);

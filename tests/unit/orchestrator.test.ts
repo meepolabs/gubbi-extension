@@ -175,6 +175,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -553,6 +554,42 @@ describe("collect failures", () => {
     expect(pauseOf(stub.store, "chatgpt")?.reason).toBe("session_lost");
   });
 
+  it.each([
+    {
+      name: "failed",
+      outcome: {
+        status: "failed",
+        reason: "transient",
+        request: requestOf(conversation("partial", "2026-02-10T00:00:00.000Z")),
+      },
+    },
+    {
+      name: "rate_limited",
+      outcome: {
+        status: "rate_limited",
+        retryAfterSeconds: 60,
+        request: requestOf(conversation("partial", "2026-02-10T00:00:00.000Z")),
+      },
+    },
+  ] as const)(
+    "a $name partial collect keeps the drift pause from an oversize_batch upload",
+    async ({ outcome }) => {
+      // Arrange
+      const stub = stubChrome();
+      const bundle = makeDeps();
+      bundle.collect.mockResolvedValue(outcome);
+      bundle.upload.mockResolvedValue({ status: "oversize_batch" });
+
+      // Act
+      await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+      // Assert
+      expect(bundle.upload).toHaveBeenCalledTimes(1);
+      expect(pauseOf(stub.store, "chatgpt")?.reason).toBe("drift");
+      expect(cursorOf(stub.store, "chatgpt")).toBeUndefined();
+    },
+  );
+
   it("waiting_for_tab when no logged-in tab is found", async () => {
     // Arrange
     const stub = stubChrome();
@@ -700,6 +737,62 @@ describe("batching", () => {
     expect(sizes).toEqual([50, 1]);
     // Final cursor is the global max watermark (minute 50).
     expect(cursorOf(stub.store, "chatgpt")).toBe("2026-02-01T00:50:00.000Z");
+  });
+});
+
+describe("watermarks with UTC offsets", () => {
+  it("orders batches and picks the cursor by instant, not by text", async () => {
+    // Arrange: "early" sorts after "late" as text but is three hours earlier as
+    // an instant, and "textMax" is the text maximum of the first batch while
+    // "early" is its latest instant. 50 conversations fill the first batch, the
+    // second batch ("late") fails, so the cursor must stop before "late".
+    const stub = stubChrome();
+    const filler = Array.from({ length: 48 }, (_, i) =>
+      conversation(`f${i}`, `2026-02-01T00:${String(i).padStart(2, "0")}:00.000Z`),
+    );
+    const textMax = conversation("textMax", "2026-02-02T09:30:00.000+06:00");
+    const early = conversation("early", "2026-02-02T09:00:00.000+05:00");
+    const late = conversation("late", "2026-02-02T07:00:00.000Z");
+    const bundle = makeDeps();
+    bundle.collect.mockResolvedValue(collectOk(requestOf(late, early, textMax, ...filler)));
+    bundle.upload
+      .mockResolvedValueOnce({ status: "ok", response: okResponse({ conversations_saved: 50 }) })
+      .mockResolvedValue({ status: "transient_http" });
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(bundle.upload).toHaveBeenCalledTimes(2);
+    const batches = bundle.upload.mock.calls.map((c) =>
+      (c[0] as IngestConversationRequest).conversations.map((conv) => conv.platform_id),
+    );
+    expect(batches[0]).toEqual(expect.arrayContaining(["early", "textMax"]));
+    expect(batches[1]).toEqual(["late"]);
+    expect(cursorOf(stub.store, "chatgpt")).toBe("2026-02-02T09:00:00.000+05:00");
+  });
+
+  it("reads a watermark with no zone designator as UTC", async () => {
+    // Arrange: as text the zoneless value sorts first; as UTC it is the later
+    // instant, so it must become the cursor. A local zone ahead of UTC makes a
+    // local-time reading of it the earlier instant.
+    vi.stubEnv("TZ", "Asia/Kolkata");
+    const stub = stubChrome();
+    const bundle = makeDeps();
+    bundle.collect.mockResolvedValue(
+      collectOk(
+        requestOf(
+          conversation("zoneless", "2026-02-02T06:00:00"),
+          conversation("offset", "2026-02-02T10:00:00+05:00"),
+        ),
+      ),
+    );
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(cursorOf(stub.store, "chatgpt")).toBe("2026-02-02T06:00:00");
   });
 });
 
