@@ -45,7 +45,7 @@ interface RawConversation {
   created_at?: string | null;
   updated_at?: string | null;
   current_leaf_message_uuid?: string | null;
-  chat_messages?: RawChatMessage[];
+  chat_messages?: unknown;
 }
 
 const BLOCK_SEPARATOR = "\n";
@@ -101,11 +101,25 @@ function toMessage(message: RawChatMessage, messageId: string): MessagePayload |
     : { role, content, message_id: messageId, timestamp };
 }
 
-function orderedMessages(conv: RawConversation): RawChatMessage[] {
-  const messages = Array.isArray(conv.chat_messages) ? [...conv.chat_messages] : [];
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// A message must be an object, and so must every entry of its content[] when
+// that is an array.
+function isRawChatMessage(value: unknown): value is RawChatMessage {
+  if (!isPlainObject(value)) return false;
+  const content = value.content;
+  return !Array.isArray(content) || content.every(isPlainObject);
+}
+
+// Null (drift) when any entry is malformed: dropping it could cut the thread.
+function orderedMessages(conv: RawConversation): RawChatMessage[] | null {
+  const raw: unknown[] = Array.isArray(conv.chat_messages) ? conv.chat_messages : [];
+  if (!raw.every(isRawChatMessage)) return null;
   // Sort by `index` ascending; messages without an index keep relative order
   // after those that have one (treated as +Infinity).
-  return messages.sort((a, b) => indexOf(a) - indexOf(b));
+  return raw.toSorted((a, b) => indexOf(a) - indexOf(b));
 }
 
 function indexOf(message: RawChatMessage): number {
@@ -160,7 +174,7 @@ function walkFromLeaf(
 // message must carry a uuid, since each one is sent as its message_id.
 function activeThread(conv: RawConversation): IdentifiedMessage[] | null {
   const ordered = orderedMessages(conv);
-  if (!ordered.every(hasUuid)) return null;
+  if (ordered === null || !ordered.every(hasUuid)) return null;
   const byUuid = indexByUuid(ordered);
   if (byUuid === null) return null;
 

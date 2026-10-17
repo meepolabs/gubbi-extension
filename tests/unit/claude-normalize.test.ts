@@ -335,6 +335,30 @@ describe("ClaudeNormalizer", () => {
         raw.current_leaf_message_uuid = "x".repeat(513);
       },
     },
+    {
+      name: "a null entry in chat_messages",
+      mutate: (raw: Record<string, unknown>) => {
+        (raw.chat_messages as unknown[]).push(null);
+      },
+    },
+    {
+      name: "a number entry in chat_messages",
+      mutate: (raw: Record<string, unknown>) => {
+        (raw.chat_messages as unknown[]).push(7);
+      },
+    },
+    {
+      name: "an array entry in chat_messages",
+      mutate: (raw: Record<string, unknown>) => {
+        (raw.chat_messages as unknown[]).push([]);
+      },
+    },
+    {
+      name: "a null content block",
+      mutate: (raw: Record<string, unknown>) => {
+        (branchedMessage(raw, "branch-msg-6").content as unknown[]).push(null);
+      },
+    },
   ])("returns null (drift) on $name", ({ mutate }) => {
     // Arrange
     const raw = cloneBranched();
