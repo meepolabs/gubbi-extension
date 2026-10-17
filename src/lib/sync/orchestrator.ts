@@ -238,6 +238,28 @@ function watermarkMs(conversation: ConversationPayload): number {
   return Date.parse(HAS_ZONE_DESIGNATOR.test(wm) ? wm : `${wm}Z`);
 }
 
+const FRACTIONAL_SECONDS = /T\d{2}:\d{2}:\d{2}[.,](\d+)/;
+
+// Digits of the fractional second beyond milliseconds, which Date.parse drops.
+// Platforms keep microseconds, so two distinct instants can share a millisecond.
+// Offsets are whole minutes, so they never change these digits.
+function subMillisecondDigits(conversation: ConversationPayload): string {
+  const match = FRACTIONAL_SECONDS.exec(watermarkOf(conversation));
+  return match?.[1]?.slice(3) ?? "";
+}
+
+function compareWatermarks(a: ConversationPayload, b: ConversationPayload): number {
+  const msDiff = watermarkMs(a) - watermarkMs(b);
+  if (msDiff !== 0) return msDiff;
+  const aDigits = subMillisecondDigits(a);
+  const bDigits = subMillisecondDigits(b);
+  const width = Math.max(aDigits.length, bDigits.length);
+  const aPadded = aDigits.padEnd(width, "0");
+  const bPadded = bDigits.padEnd(width, "0");
+  if (aPadded === bPadded) return 0;
+  return aPadded < bPadded ? -1 : 1;
+}
+
 // The effective `since` passed to collect: the stored cursor rewound by
 // CURSOR_REWIND_MS (so same-second updates are not skipped), or undefined on a
 // first run with no cursor yet.
@@ -268,7 +290,7 @@ interface BatchPlan {
 // the growing batch; this equals serializeRequest of the batch because
 // JSON.stringify without indentation joins array items with a single comma.
 function toBatches(request: IngestConversationRequest): BatchPlan {
-  const sorted = [...request.conversations].sort((a, b) => watermarkMs(a) - watermarkMs(b));
+  const sorted = [...request.conversations].sort(compareWatermarks);
   const envelopeBytes = utf8Bytes(serializeRequest({ source: request.source, conversations: [] }));
   const batches: IngestConversationRequest[] = [];
   let droppedCount = 0;
@@ -319,7 +341,7 @@ async function recordDroppedOversize(
 function maxWatermark(batch: IngestConversationRequest): string | undefined {
   let max: ConversationPayload | undefined;
   for (const conversation of batch.conversations) {
-    if (max === undefined || watermarkMs(conversation) > watermarkMs(max)) max = conversation;
+    if (max === undefined || compareWatermarks(conversation, max) > 0) max = conversation;
   }
   return max === undefined ? undefined : watermarkOf(max);
 }

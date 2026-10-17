@@ -12,6 +12,7 @@ import type { SyncStatusState } from "../../src/lib/messages";
 import type { TokenProvider } from "../../src/lib/token-provider";
 import { runSync, type RunSyncDeps } from "../../src/lib/sync/orchestrator";
 import { INGEST_MAX_BODY_BYTES, serializeRequest } from "../../src/lib/api";
+import { ClaudeFetcher } from "../../src/lib/connectors/claude/fetch";
 import { stubChromeStorageWithEvents as stubChrome } from "../helpers/chrome-stub";
 
 // The orchestrator goes through storage.ts (cursor/counters/pause/events) and
@@ -793,6 +794,52 @@ describe("watermarks with UTC offsets", () => {
 
     // Assert
     expect(cursorOf(stub.store, "chatgpt")).toBe("2026-02-02T06:00:00");
+  });
+});
+
+describe("watermarks with sub-millisecond precision", () => {
+  it("orders same-millisecond watermarks by their full fractional second", async () => {
+    // Arrange: both watermarks fall in the same millisecond, so only the
+    // microsecond digits order them. The later one comes first from the
+    // collector; 49 earlier conversations put the boundary between the two, and
+    // the second batch fails, so the cursor must stop at the earlier one.
+    const stub = stubChrome();
+    const earlier = Array.from({ length: 49 }, (_, i) =>
+      conversation(`e${i}`, `2026-02-01T00:${String(i).padStart(2, "0")}:00.000Z`),
+    );
+    const laterMicros = conversation("laterMicros", "2026-02-02T00:00:00.000999Z");
+    const earlierMicros = conversation("earlierMicros", "2026-02-02T00:00:00.000001Z");
+    const run1 = makeDeps();
+    run1.collect.mockResolvedValue(collectOk(requestOf(...earlier, laterMicros, earlierMicros)));
+    run1.upload
+      .mockResolvedValueOnce({ status: "ok", response: okResponse({ conversations_saved: 50 }) })
+      .mockResolvedValue({ status: "transient_http", httpStatus: 503 });
+
+    // Act: the failed run, then a later wake past the backoff window.
+    await runSync({ platform: "chatgpt", deps: run1.deps });
+    const cursorAfterFailure = cursorOf(stub.store, "chatgpt");
+    const run2 = makeDeps({ now: () => NOW_MS + 60 * 60 * 1000 });
+    await runSync({ platform: "chatgpt", deps: run2.deps });
+    const since = run2.collect.mock.calls[0]?.[2] as string | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const body = url.includes("/chat_conversations")
+        ? [{ uuid: "laterMicros", name: "", updated_at: "2026-02-02T00:00:00.000999Z" }]
+        : [{ uuid: "org", capabilities: ["chat"] }];
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    });
+    const listed = await new ClaudeFetcher().listConversationsRaw(since);
+
+    // Assert
+    const batches = run1.upload.mock.calls.map((c) =>
+      (c[0] as IngestConversationRequest).conversations.map((conv) => conv.platform_id),
+    );
+    expect(batches[1]).toEqual(["laterMicros"]);
+    expect(cursorAfterFailure).toBe("2026-02-02T00:00:00.000001Z");
+    expect(since).toBeDefined();
+    expect(listed.status === "ok" ? listed.data.map((s) => s.platform_id) : []).toEqual([
+      "laterMicros",
+    ]);
   });
 });
 
