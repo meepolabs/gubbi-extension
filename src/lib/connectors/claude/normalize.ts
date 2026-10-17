@@ -119,7 +119,7 @@ function orderedMessages(conv: RawConversation): RawChatMessage[] | null {
   if (!raw.every(isRawChatMessage)) return null;
   // Sort by `index` ascending; messages without an index keep relative order
   // after those that have one (treated as +Infinity).
-  return raw.toSorted((a, b) => indexOf(a) - indexOf(b));
+  return [...raw].sort((a, b) => indexOf(a) - indexOf(b));
 }
 
 function indexOf(message: RawChatMessage): number {
