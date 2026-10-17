@@ -1,1 +1,2 @@
 scripts/verify-required-needs.mjs text eol=lf
+tests/fixtures/ingest-contract.json text eol=lf

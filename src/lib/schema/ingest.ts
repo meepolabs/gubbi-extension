@@ -56,11 +56,50 @@ const ExternalIdSchema = z.string().refine(isBoundedWellFormedId, {
   message: `must be 1-${EXTERNAL_ID_MAX_CODE_POINTS} code points of well-formed text`,
 });
 
+const WALL_MINUTE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/;
+const NUMERIC_OFFSET = /([+-])(\d{2}):(\d{2})$/;
+
+function minutesSinceEpoch(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): number {
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, 0, 0);
+  return date.getTime() / 60_000;
+}
+
+const MIN_UTC_MINUTE = minutesSinceEpoch(1, 1, 1, 0, 0);
+const MAX_UTC_MINUTE = minutesSinceEpoch(9999, 12, 31, 23, 59);
+
+// The backend converts an offset timestamp to UTC and rejects it when the
+// result leaves years 0001-9999. Offsets are whole minutes, so seconds and
+// fractions never move the instant across a minute boundary and comparing
+// minutes is exact.
+function staysInRangeAfterUtc(value: string): boolean {
+  const offset = NUMERIC_OFFSET.exec(value);
+  const wall = WALL_MINUTE.exec(value);
+  if (!offset || !wall) {
+    return true;
+  }
+  const [year = 0, month = 0, day = 0, hour = 0, minute = 0] = wall.slice(1).map(Number);
+  const sign = offset[1] === "-" ? -1 : 1;
+  const offsetMinutes = sign * (Number(offset[2]) * 60 + Number(offset[3]));
+  const utcMinute = minutesSinceEpoch(year, month, day, hour, minute) - offsetMinutes;
+  return utcMinute >= MIN_UTC_MINUTE && utcMinute <= MAX_UTC_MINUTE;
+}
+
 // zod's datetime admits year 0000, which the backend rejects. A timestamp with
 // no offset is treated as UTC by the backend.
 const TimestampSchema = z.iso
   .datetime({ offset: true, local: true })
-  .refine((value) => !value.startsWith("0000-"), { message: "year must be 0001 or later" });
+  .refine((value) => !value.startsWith("0000-"), { message: "year must be 0001 or later" })
+  .refine(staysInRangeAfterUtc, {
+    message: "must stay within years 0001-9999 once converted to UTC",
+  });
 
 export const RoleSchema = z.enum(["user", "assistant", "system"]);
 

@@ -46,6 +46,10 @@ const ACCEPTED_TIMESTAMPS: Array<[string, string]> = [
   ["minutes only", "2026-06-05T12:00"],
   ["nine-digit fraction", "2026-06-05T12:00:00.123456789Z"],
   ["year 0001", "0001-01-01T00:00:00Z"],
+  ["latest UTC instant", "9999-12-31T23:59:59.999999Z"],
+  ["year 9999 pulled back inside by a positive offset", "9999-12-31T23:59:00+01:00"],
+  ["year 0001 pushed forward by a negative offset", "0001-01-01T00:00:00-01:00"],
+  ["naive year 9999 (never converted)", "9999-12-31T23:59:59"],
 ];
 
 const REJECTED_TIMESTAMPS: Array<[string, unknown]> = [
@@ -60,6 +64,8 @@ const REJECTED_TIMESTAMPS: Array<[string, unknown]> = [
   ["February 30", "2026-02-30T12:00:00Z"],
   ["hour 24", "2026-06-05T24:00:00Z"],
   ["second 60", "2026-06-05T12:00:60Z"],
+  ["past year 9999 once converted to UTC", "9999-12-31T23:59:00-01:00"],
+  ["before year 0001 once converted to UTC", "0001-01-01T00:00:00+01:00"],
 ];
 
 describe("IngestConversationRequestSchema", () => {

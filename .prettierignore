@@ -22,3 +22,6 @@ CODEMAP.md
 
 # Byte copy of another repo's checker, pinned by sha256 in its test; keeps that repo's formatting
 scripts/verify-required-needs.mjs
+
+# Byte copy of the backend ingest contract fixture, pinned by sha256 in its test
+tests/fixtures/ingest-contract.json
