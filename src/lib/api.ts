@@ -1,6 +1,7 @@
 import { guardedFetch } from "./net/fetch";
 import {
   HTTP_FORBIDDEN,
+  HTTP_PAYLOAD_TOO_LARGE,
   HTTP_SERVER_ERROR_FLOOR,
   HTTP_TOO_MANY_REQUESTS,
   HTTP_UNAUTHORIZED,
@@ -26,6 +27,15 @@ export const INGEST_PATH = "/v1/ingest/conversations";
 const DEFAULT_API_ORIGIN = "https://api.gubbi.ai";
 
 const MILLIS_PER_SECOND = 1000;
+
+// Mirrors the backend's per-request body cap; a larger body is rejected with 413.
+export const INGEST_MAX_BODY_BYTES = 26_214_400;
+
+// The exact request body the client sends. Batch sizing measures this same
+// serialization so the client-side byte budget matches what goes on the wire.
+export function serializeRequest(request: IngestConversationRequest): string {
+  return JSON.stringify(request);
+}
 
 // Accepts a bare host ("api.gubbi.ai") or a full URL; returns the origin. Mirrors
 // the egress allowlist + auth config so the request lands on the allowed host.
@@ -90,6 +100,7 @@ async function parseOkBody(response: Response): Promise<UploadOutcome> {
 function mapErrorStatus(response: Response): UploadOutcome {
   if (response.status === HTTP_UNAUTHORIZED) return { status: "needs_refresh" };
   if (response.status === HTTP_FORBIDDEN) return { status: "insufficient_scope" };
+  if (response.status === HTTP_PAYLOAD_TOO_LARGE) return { status: "oversize_batch" };
   if (response.status === HTTP_TOO_MANY_REQUESTS) {
     return {
       status: "rate_limited",
@@ -129,7 +140,7 @@ export async function uploadConversations(
         authorization: `Bearer ${accessToken}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify(request),
+      body: serializeRequest(request),
     });
   } catch {
     // Transport failure, redirect rejection, or disallowed host.

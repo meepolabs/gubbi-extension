@@ -11,6 +11,7 @@ import type {
 import type { SyncStatusState } from "../../src/lib/messages";
 import type { TokenProvider } from "../../src/lib/token-provider";
 import { runSync, type RunSyncDeps } from "../../src/lib/sync/orchestrator";
+import { INGEST_MAX_BODY_BYTES, serializeRequest } from "../../src/lib/api";
 import { stubChromeStorageWithEvents as stubChrome } from "../helpers/chrome-stub";
 
 // The orchestrator goes through storage.ts (cursor/counters/pause/events) and
@@ -151,8 +152,10 @@ function cursorOf(store: Record<string, unknown>, platform: AdapterPlatform): un
 }
 function countersOf(
   store: Record<string, unknown>,
-): { conversations_uploaded: number } | undefined {
-  return store["gubbi:counters"] as { conversations_uploaded: number } | undefined;
+): { conversations_uploaded: number; conversations_skipped: number } | undefined {
+  return store["gubbi:counters"] as
+    | { conversations_uploaded: number; conversations_skipped: number }
+    | undefined;
 }
 function pauseOf(
   store: Record<string, unknown>,
@@ -697,5 +700,177 @@ describe("batching", () => {
     expect(sizes).toEqual([50, 1]);
     // Final cursor is the global max watermark (minute 50).
     expect(cursorOf(stub.store, "chatgpt")).toBe("2026-02-01T00:50:00.000Z");
+  });
+});
+
+// ---- Byte-cap helpers ----------------------------------------------------------
+
+const utf8 = new TextEncoder();
+
+function bodyBytes(request: IngestConversationRequest): number {
+  return utf8.encode(serializeRequest(request)).length;
+}
+
+// A conversation whose single message content is padded with `filler` so the
+// conversation's own serialized JSON grows by `fillerCount` repetitions.
+function paddedConversation(
+  platformId: string,
+  updatedAt: string,
+  fillerCount: number,
+  filler = "a",
+): IngestConversationRequest["conversations"][number] {
+  return {
+    ...conversation(platformId, updatedAt),
+    messages: [{ role: "user", content: filler.repeat(fillerCount) }],
+  };
+}
+
+// Pads a conversation so a request holding only it serializes to exactly
+// `targetBytes` UTF-8 bytes.
+function conversationWithRequestBytes(
+  platformId: string,
+  updatedAt: string,
+  targetBytes: number,
+): IngestConversationRequest["conversations"][number] {
+  const base = bodyBytes(requestOf(paddedConversation(platformId, updatedAt, 0)));
+  return paddedConversation(platformId, updatedAt, targetBytes - base);
+}
+
+function uploadedBatches(upload: ReturnType<typeof vi.fn>): IngestConversationRequest[] {
+  return upload.mock.calls.map((c) => c[0] as IngestConversationRequest);
+}
+
+function uploadedIds(upload: ReturnType<typeof vi.fn>): string[][] {
+  return uploadedBatches(upload).map((b) => b.conversations.map((c) => c.platform_id));
+}
+
+describe("byte-aware batching", () => {
+  it("splits two conversations each at 60% of the body cap into two batches", async () => {
+    // Arrange
+    stubChrome();
+    const size = Math.floor(INGEST_MAX_BODY_BYTES * 0.6);
+    const bundle = makeDeps();
+    bundle.collect.mockResolvedValue(
+      collectOk(
+        requestOf(
+          conversationWithRequestBytes("late", "2026-02-02T00:00:00.000Z", size),
+          conversationWithRequestBytes("early", "2026-02-01T00:00:00.000Z", size),
+        ),
+      ),
+    );
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(uploadedIds(bundle.upload)).toEqual([["early"], ["late"]]);
+    for (const batch of uploadedBatches(bundle.upload)) {
+      expect(bodyBytes(batch)).toBeLessThanOrEqual(INGEST_MAX_BODY_BYTES);
+    }
+  });
+
+  it.each([
+    { name: "exactly the cap goes as one batch", extraBytes: 0, expectedBatches: 1 },
+    { name: "one byte over the cap splits into two batches", extraBytes: 1, expectedBatches: 2 },
+  ])("a two-conversation request of $name", async ({ extraBytes, expectedBatches }) => {
+    // Arrange: size the second conversation so the combined request serializes to
+    // the cap plus extraBytes.
+    stubChrome();
+    const first = paddedConversation("c1", "2026-02-01T00:00:00.000Z", 1000);
+    const secondBase = paddedConversation("c2", "2026-02-02T00:00:00.000Z", 0);
+    const baseBytes = bodyBytes(requestOf(first, secondBase));
+    const second = paddedConversation(
+      "c2",
+      "2026-02-02T00:00:00.000Z",
+      INGEST_MAX_BODY_BYTES + extraBytes - baseBytes,
+    );
+    expect(bodyBytes(requestOf(first, second))).toBe(INGEST_MAX_BODY_BYTES + extraBytes);
+    const bundle = makeDeps();
+    bundle.collect.mockResolvedValue(collectOk(requestOf(first, second)));
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(bundle.upload).toHaveBeenCalledTimes(expectedBatches);
+    if (expectedBatches === 1) {
+      expect(bodyBytes(uploadedBatches(bundle.upload)[0]!)).toBe(INGEST_MAX_BODY_BYTES);
+    }
+  });
+
+  it("drops a single over-cap conversation, counts it skipped, keeps watermark order", async () => {
+    // Arrange: built in reverse so the orchestrator must sort; the middle
+    // conversation alone serializes one byte over the cap.
+    const stub = stubChrome();
+    const bundle = makeDeps();
+    bundle.collect.mockResolvedValue(
+      collectOk(
+        requestOf(
+          conversation("c3", "2026-02-03T00:00:00.000Z"),
+          conversationWithRequestBytes(
+            "big",
+            "2026-02-02T00:00:00.000Z",
+            INGEST_MAX_BODY_BYTES + 1,
+          ),
+          conversation("c1", "2026-02-01T00:00:00.000Z"),
+        ),
+      ),
+    );
+    bundle.upload.mockResolvedValue({
+      status: "ok",
+      response: okResponse({ conversations_saved: 2 }),
+    });
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(uploadedIds(bundle.upload)).toEqual([["c1", "c3"]]);
+    expect(countersOf(stub.store)?.conversations_skipped).toBe(1);
+    expect(countersOf(stub.store)?.conversations_uploaded).toBe(2);
+    expect(cursorOf(stub.store, "chatgpt")).toBe("2026-02-03T00:00:00.000Z");
+  });
+
+  it("measures the cap in UTF-8 bytes, not string length", async () => {
+    // Arrange: content under the cap in UTF-16 code units but over it in bytes
+    // (each "e-acute" is one code unit and two UTF-8 bytes).
+    const stub = stubChrome();
+    const multibyte = paddedConversation(
+      "wide",
+      "2026-02-02T00:00:00.000Z",
+      Math.ceil(INGEST_MAX_BODY_BYTES / 2),
+      "\u00e9",
+    );
+    expect(serializeRequest(requestOf(multibyte)).length).toBeLessThan(INGEST_MAX_BODY_BYTES);
+    expect(bodyBytes(requestOf(multibyte))).toBeGreaterThan(INGEST_MAX_BODY_BYTES);
+    const bundle = makeDeps();
+    bundle.collect.mockResolvedValue(
+      collectOk(requestOf(multibyte, conversation("c1", "2026-02-01T00:00:00.000Z"))),
+    );
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(uploadedIds(bundle.upload)).toEqual([["c1"]]);
+    expect(countersOf(stub.store)?.conversations_skipped).toBe(1);
+  });
+});
+
+describe("oversize_batch from the server", () => {
+  it("sets a drift pause and uploads the batch once with no retry", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const bundle = makeDeps();
+    bundle.upload.mockResolvedValue({ status: "oversize_batch" });
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(bundle.upload).toHaveBeenCalledTimes(1);
+    expect(pauseOf(stub.store, "chatgpt")?.reason).toBe("drift");
+    expect(cursorOf(stub.store, "chatgpt")).toBeUndefined();
+    expect(bundle.statuses().at(-1)).toBe("paused");
   });
 });

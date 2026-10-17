@@ -17,7 +17,7 @@ vi.mock("../../src/lib/net/fetch", () => ({
   guardedFetch: (input: string | URL, init?: RequestInit) => fetchMock(input, init),
 }));
 
-import { uploadConversations, INGEST_PATH } from "../../src/lib/api";
+import { uploadConversations, INGEST_PATH, serializeRequest } from "../../src/lib/api";
 
 const TOKEN = "ory_at_test-access-token";
 
@@ -209,6 +209,29 @@ describe("uploadConversations", () => {
 
     // Assert
     expect(outcome).toEqual({ status: "network" });
+  });
+
+  it("maps 413 to oversize_batch", async () => {
+    // Arrange
+    fetchMock.mockResolvedValue(new Response("", { status: 413 }));
+
+    // Act
+    const outcome = await uploadConversations(requestWith(1), fakeProvider());
+
+    // Assert
+    expect(outcome).toEqual({ status: "oversize_batch" });
+  });
+
+  it("sends the body exactly as serializeRequest produces it", async () => {
+    // Arrange
+    fetchMock.mockResolvedValue(jsonResponse(okBody, { status: 200 }));
+    const request = requestWith(2);
+
+    // Act
+    await uploadConversations(request, fakeProvider());
+
+    // Assert
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(serializeRequest(request));
   });
 
   it("returns oversize_batch without calling the network for >50 conversations", async () => {

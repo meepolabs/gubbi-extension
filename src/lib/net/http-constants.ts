@@ -5,6 +5,7 @@
 
 export const HTTP_UNAUTHORIZED = 401;
 export const HTTP_FORBIDDEN = 403;
+export const HTTP_PAYLOAD_TOO_LARGE = 413;
 export const HTTP_TOO_MANY_REQUESTS = 429;
 
 // Any status at or above this floor is a server-side error (5xx), treated as

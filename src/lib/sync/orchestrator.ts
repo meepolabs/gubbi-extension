@@ -15,7 +15,12 @@ import {
   setStatus,
   SYNC_LEASE_KEY,
 } from "../storage";
-import { uploadConversations as realUpload, type UploadOutcome } from "../api";
+import {
+  INGEST_MAX_BODY_BYTES,
+  serializeRequest,
+  uploadConversations as realUpload,
+  type UploadOutcome,
+} from "../api";
 import { collectFromTab as realCollect, type CollectOutcome } from "./collect";
 import type { AdapterPlatform } from "../connectors/base";
 import type { IngestConversationRequest, ConversationPayload } from "../schema/ingest";
@@ -42,7 +47,8 @@ import type { TokenProvider } from "../token-provider";
 // worker's stale lease is taken over on the next wake rather than wedging sync.
 const SYNC_LEASE_TTL_MS = 5 * 60 * 1000;
 
-// Per-batch conversation cap (mirrors the upload client + backend bound).
+// Per-batch conversation cap (mirrors the upload client + backend bound). A batch
+// is also closed early when its serialized body would exceed INGEST_MAX_BODY_BYTES.
 const BATCH_SIZE = MAX_CONVERSATIONS_PER_REQUEST;
 
 // Default backoff when a rate-limit carries no Retry-After hint.
@@ -230,17 +236,76 @@ function effectiveSince(cursorIso: string | undefined): string | undefined {
   return isoFromMs(Date.parse(cursorIso) - CURSOR_REWIND_MS);
 }
 
-// Split a request's conversations into <= BATCH_SIZE batches, each in ascending
-// watermark order, so the cursor advances monotonically as batches succeed.
-function toBatches(request: IngestConversationRequest): IngestConversationRequest[] {
+const utf8 = new TextEncoder();
+
+function utf8Bytes(text: string): number {
+  return utf8.encode(text).length;
+}
+
+// Byte separating adjacent conversations in the serialized array.
+const ARRAY_SEPARATOR_BYTES = 1;
+
+interface BatchPlan {
+  readonly batches: IngestConversationRequest[];
+  // Conversations whose request alone would exceed the body cap; never uploaded.
+  readonly droppedCount: number;
+}
+
+// Split a request's conversations into batches of at most BATCH_SIZE whose
+// serialized body stays within INGEST_MAX_BODY_BYTES, in ascending watermark
+// order so the cursor advances monotonically as batches succeed. The body size
+// is summed per conversation (each serialized once) rather than re-serializing
+// the growing batch; this equals serializeRequest of the batch because
+// JSON.stringify without indentation joins array items with a single comma.
+function toBatches(request: IngestConversationRequest): BatchPlan {
   const sorted = [...request.conversations].sort((a, b) =>
     watermarkOf(a) < watermarkOf(b) ? -1 : watermarkOf(a) > watermarkOf(b) ? 1 : 0,
   );
+  const envelopeBytes = utf8Bytes(serializeRequest({ source: request.source, conversations: [] }));
   const batches: IngestConversationRequest[] = [];
-  for (let i = 0; i < sorted.length; i += BATCH_SIZE) {
-    batches.push({ source: request.source, conversations: sorted.slice(i, i + BATCH_SIZE) });
+  let droppedCount = 0;
+  let current: ConversationPayload[] = [];
+  let currentBytes = envelopeBytes;
+
+  for (const conversation of sorted) {
+    const conversationBytes = utf8Bytes(JSON.stringify(conversation));
+    if (envelopeBytes + conversationBytes > INGEST_MAX_BODY_BYTES) {
+      droppedCount += 1;
+      continue;
+    }
+    const added = conversationBytes + (current.length > 0 ? ARRAY_SEPARATOR_BYTES : 0);
+    if (current.length >= BATCH_SIZE || currentBytes + added > INGEST_MAX_BODY_BYTES) {
+      batches.push({ source: request.source, conversations: current });
+      current = [conversation];
+      currentBytes = envelopeBytes + conversationBytes;
+      continue;
+    }
+    current.push(conversation);
+    currentBytes += added;
   }
-  return batches;
+  if (current.length > 0) batches.push({ source: request.source, conversations: current });
+  return { batches, droppedCount };
+}
+
+async function recordDroppedOversize(
+  platform: AdapterPlatform,
+  droppedCount: number,
+): Promise<void> {
+  if (droppedCount === 0) return;
+  logger.warn("dropped conversations larger than the request body cap", {
+    platform,
+    dropped: droppedCount,
+    maxBodyBytes: INGEST_MAX_BODY_BYTES,
+  });
+  const existing = (await getCounters()) ?? {
+    conversations_uploaded: 0,
+    conversations_skipped: 0,
+    last_run_at: null,
+  };
+  await setCounters({
+    ...existing,
+    conversations_skipped: existing.conversations_skipped + droppedCount,
+  });
 }
 
 function maxWatermark(batch: IngestConversationRequest): string | undefined {
@@ -327,7 +392,8 @@ async function uploadBatches(
   platform: AdapterPlatform,
   request: IngestConversationRequest,
 ): Promise<UploadLoopResult> {
-  const batches = toBatches(request);
+  const { batches, droppedCount } = toBatches(request);
+  await recordDroppedOversize(platform, droppedCount);
   for (const batch of batches) {
     const result = await uploadOneBatch(deps, platform, batch);
     if (result.kind !== "continue") return result;
@@ -422,9 +488,14 @@ async function applyUploadOutcome(
       return { kind: "paused" };
     }
     case "oversize_batch": {
-      // Cannot happen -- batches are capped at BATCH_SIZE. A programming error if
-      // it does; stop rather than loop.
-      logger.error("oversize batch reached upload despite batching", { platform });
+      // The server rejected a batch the client sized under the cap, so the two
+      // sides disagree on the limit. Re-sending would hit the same rejection on
+      // every run; pause as drift instead.
+      logger.error("upload rejected as oversize despite byte-aware batching", {
+        platform,
+        conversations: batch.conversations.length,
+      });
+      await pause(deps, platform, "drift", deps.now() + DEFAULT_DRIFT_BACKOFF_MS);
       return { kind: "paused" };
     }
     default: {
