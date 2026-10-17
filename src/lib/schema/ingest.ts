@@ -9,8 +9,28 @@ import { z } from "zod";
 // Matches MAX_CONVERSATIONS_PER_REQUEST in the backend ingest module.
 export const MAX_CONVERSATIONS_PER_REQUEST = 50;
 
-// Upper bound on a conversation's platform_id (backend Field max_length).
-const PLATFORM_ID_MAX_LENGTH = 512;
+// Upper bound on platform_id and message_id, in code points (the backend
+// counts code points; zod's .max counts UTF-16 units, so an astral character
+// would count twice there).
+const EXTERNAL_ID_MAX_CODE_POINTS = 512;
+
+function isBoundedWellFormedId(value: string): boolean {
+  if (!value.isWellFormed()) {
+    return false;
+  }
+  const codePoints = [...value].length;
+  return codePoints >= 1 && codePoints <= EXTERNAL_ID_MAX_CODE_POINTS;
+}
+
+const ExternalIdSchema = z.string().refine(isBoundedWellFormedId, {
+  message: `must be 1-${EXTERNAL_ID_MAX_CODE_POINTS} code points of well-formed text`,
+});
+
+// zod's datetime admits year 0000, which the backend rejects. A timestamp with
+// no offset is treated as UTC by the backend.
+const TimestampSchema = z.iso
+  .datetime({ offset: true, local: true })
+  .refine((value) => !value.startsWith("0000-"), { message: "year must be 0001 or later" });
 
 export const RoleSchema = z.enum(["user", "assistant", "system"]);
 
@@ -26,15 +46,16 @@ export const IngestSourceSchema = z.enum([
 export const MessagePayloadSchema = z.object({
   role: RoleSchema,
   content: z.string(),
-  timestamp: z.iso.datetime().nullable().optional(),
+  message_id: ExternalIdSchema.nullable().optional(),
+  timestamp: TimestampSchema.nullable().optional(),
 });
 
 export const ConversationPayloadSchema = z.object({
   platform: PlatformSchema,
-  platform_id: z.string().min(1).max(PLATFORM_ID_MAX_LENGTH),
+  platform_id: ExternalIdSchema,
   title: z.string().default(""),
-  created_at: z.iso.datetime(),
-  updated_at: z.iso.datetime().nullable().optional(),
+  created_at: TimestampSchema,
+  updated_at: TimestampSchema.nullable().optional(),
   messages: z.array(MessagePayloadSchema).min(1),
 });
 
