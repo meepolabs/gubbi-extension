@@ -40,11 +40,11 @@ the privacy invariant in the README); the build enforces this.
 | Path | Purpose |
 |---|---|
 | `src/lib/auth/` | OAuth "redirect-flow" pairing + token lifecycle. `pkce` (S256 verifier/challenge), `authorize-url`, `launch` (the browser identity redirect driver), `exchange` (code -> tokens), `refresh` (rotation-safe refresh), `revoke`, `provider` (the `TokenProvider` implementation: cached-or-refresh + force-refresh), `startup` (reconciles an interrupted refresh), `config`, `errors`, `token-body` (shared token-response parser), `index`. |
-| `src/lib/sync/` | `collect` drives one platform tab through list -> per-conversation fetch -> normalize and returns a typed outcome (ok / rate-limited / failed). `orchestrator` runs the sync under a single-flight lease: finds a tab, collects, uploads in capped batches, advances a per-platform cursor only after a confirmed save, and maps every failure to a typed pause/backoff or a reconnect. |
+| `src/lib/sync/` | `collect` drives one platform tab through list -> per-conversation fetch -> normalize and returns a typed outcome (ok / rate-limited / failed). `orchestrator` runs the sync under a single-flight lease: finds a tab, collects, uploads in batches capped by conversation count and serialized body size (a conversation too large for any request is dropped), advances a per-platform cursor only after a confirmed save, and maps every failure to a typed pause/backoff or a reconnect. |
 | `src/lib/connectors/` | Per-platform adapters. `*/fetch` (content-side raw reads via the page session), `*/normalize` (background-side Zod normalization to the wire schema), `base` (the adapter interface), `registry`, `http`, `outcome` (raw-fetch outcome mapping), `content-listener` (the content-script message handler). |
 | `src/lib/net/` | `fetch` -- the single egress chokepoint: a closed host-allowlist, https-only, redirect-blocking fetch wrapper for all extension-context network IO. `http-constants` -- shared HTTP status codes. |
 | `src/lib/schema/` | `ingest` -- the Zod wire schema mirroring the ingest API request/response (the contract boundary). |
-| `src/lib/` (root) | `storage` (typed `chrome.storage.local` wrapper; every blob is schema-validated, corrupt = absent; holds the auth blob, refresh marker, per-platform cursor/pause-state/counters, status, and a content-free event ring buffer), `messages` (the background <-> content <-> popup discriminated-union envelope + guard), `locks` (`withStorageLock`: heartbeated, owner-checked, stale-takeover -- wraps both the auth lock and the sync lease), `token-provider` (the interface the upload client depends on, so it never imports `auth/`), `api` (the typed ingest upload client), `logger`. |
+| `src/lib/` (root) | `storage` (typed `chrome.storage.local` wrapper; every blob is schema-validated, corrupt = absent; holds the auth blob, refresh marker, per-platform cursor/pause-state/counters, status, and a content-free event ring buffer), `messages` (the background <-> content <-> popup discriminated-union envelope + guard), `locks` (`withStorageLock`: heartbeated, owner-checked, stale-takeover -- wraps both the auth lock and the sync lease), `token-provider` (the interface the upload client depends on, so it never imports `auth/`), `api` (the typed ingest upload client; owns the request serialization and the per-request body-size cap), `logger`. |
 | `scripts/` | `content-isolation` (in-build Rollup gate: fails if any third-party module is reachable from a content bundle), `verify-manifest` (post-build manifest + egress-allowlist assertions), `verify-required-needs` (asserts the CI `required` job depends on every other CI job; byte copy of gubbi-web's checker, pinned by sha256 in its test). |
 
 ## Entry points
@@ -62,7 +62,8 @@ the privacy invariant in the README); the build enforces this.
 
 - The hosted **ingest API** and **OAuth server** (HTTP only -- see "Where it
   fits"). No code dependency; the wire contract is mirrored by the local Zod
-  schema.
+  schema, which is checked against a byte-pinned copy of the backend's
+  generated contract fixture (`tests/fixtures/ingest-contract.json`).
 - No shared packages. This repo is intentionally standalone so the
   cookie-touching client is independently auditable.
 
