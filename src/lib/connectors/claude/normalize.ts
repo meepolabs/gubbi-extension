@@ -9,9 +9,14 @@ import { ConversationPayloadSchema, type MessagePayload, type Role } from "../..
 //   { uuid, name, created_at (ISO string), updated_at, current_leaf_message_uuid,
 //     chat_messages: [ { uuid, text, content: [...], sender, index, created_at,
 //                        parent_message_uuid } ] }
-// rendering_mode=messages returns the active thread already, so v1 trusts
-// chat_messages in `index` order. Branching (current_leaf_message_uuid /
-// parent_message_uuid) EXISTS and is reserved for a later milestone.
+// chat_messages can hold every branch of an edited or retried thread. The
+// active thread is the path from current_leaf_message_uuid up through
+// parent_message_uuid. The root's parent is a sentinel uuid that matches no
+// message, so a parent absent from chat_messages ends the walk; the path is
+// only accepted when it ends at the lowest-index message, otherwise a missing
+// node cut it short. The server appends unseen message ids and never deletes,
+// so a wrong or partial path is permanent: every doubt returns null (drift).
+// With no leaf at all, chat_messages is taken in `index` order.
 //
 // TEXT-ONLY rule: journal only the plain text of content blocks of type "text"
 // for messages whose sender maps to user / assistant / system. Every other
@@ -25,6 +30,8 @@ interface RawContentBlock {
 }
 
 interface RawChatMessage {
+  uuid?: string;
+  parent_message_uuid?: string | null;
   text?: string | null;
   content?: RawContentBlock[] | null;
   sender?: string;
@@ -37,6 +44,7 @@ interface RawConversation {
   name?: string;
   created_at?: string | null;
   updated_at?: string | null;
+  current_leaf_message_uuid?: string | null;
   chat_messages?: RawChatMessage[];
 }
 
@@ -77,7 +85,7 @@ function renderMessageText(message: RawChatMessage): string {
   return typeof message.text === "string" ? message.text : "";
 }
 
-function toMessage(message: RawChatMessage): MessagePayload | null {
+function toMessage(message: RawChatMessage, messageId: string): MessagePayload | null {
   const role = mapSender(message.sender);
   if (role === null) return null;
 
@@ -88,7 +96,9 @@ function toMessage(message: RawChatMessage): MessagePayload | null {
   const createdAt = message.created_at;
   const timestamp =
     typeof createdAt === "string" && !Number.isNaN(Date.parse(createdAt)) ? createdAt : null;
-  return timestamp === null ? { role, content } : { role, content, timestamp };
+  return timestamp === null
+    ? { role, content, message_id: messageId }
+    : { role, content, message_id: messageId, timestamp };
 }
 
 function orderedMessages(conv: RawConversation): RawChatMessage[] {
@@ -100,6 +110,75 @@ function orderedMessages(conv: RawConversation): RawChatMessage[] {
 
 function indexOf(message: RawChatMessage): number {
   return typeof message.index === "number" ? message.index : Number.POSITIVE_INFINITY;
+}
+
+type IdentifiedMessage = RawChatMessage & { uuid: string };
+
+function hasUuid(message: RawChatMessage): message is IdentifiedMessage {
+  return typeof message.uuid === "string";
+}
+
+// Null when two messages share a uuid: the leaf walk and the server's per-id
+// merge would both be ambiguous.
+function indexByUuid(messages: IdentifiedMessage[]): Map<string, IdentifiedMessage> | null {
+  const byUuid = new Map<string, IdentifiedMessage>();
+  for (const message of messages) {
+    if (byUuid.has(message.uuid)) return null;
+    byUuid.set(message.uuid, message);
+  }
+  return byUuid;
+}
+
+function parentOf(
+  message: IdentifiedMessage,
+  byUuid: Map<string, IdentifiedMessage>,
+): IdentifiedMessage | undefined {
+  const parent = message.parent_message_uuid;
+  return typeof parent === "string" ? byUuid.get(parent) : undefined;
+}
+
+function walkFromLeaf(
+  leaf: IdentifiedMessage,
+  ordered: IdentifiedMessage[],
+  byUuid: Map<string, IdentifiedMessage>,
+): IdentifiedMessage[] | null {
+  const path: IdentifiedMessage[] = [];
+  const seen = new Set<string>();
+  const maxHops = ordered.length + 1;
+  let cursor: IdentifiedMessage | undefined = leaf;
+  while (cursor !== undefined) {
+    if (seen.has(cursor.uuid) || path.length >= maxHops) return null;
+    seen.add(cursor.uuid);
+    path.push(cursor);
+    cursor = parentOf(cursor, byUuid);
+  }
+  if (path[path.length - 1] !== ordered[0]) return null;
+  return path.reverse();
+}
+
+// Root-first active thread, or null (drift) when it cannot be trusted. Every
+// message must carry a uuid, since each one is sent as its message_id.
+function activeThread(conv: RawConversation): IdentifiedMessage[] | null {
+  const ordered = orderedMessages(conv);
+  if (!ordered.every(hasUuid)) return null;
+  const byUuid = indexByUuid(ordered);
+  if (byUuid === null) return null;
+
+  const leafUuid = conv.current_leaf_message_uuid;
+  if (leafUuid === undefined || leafUuid === null) return ordered;
+  if (typeof leafUuid !== "string") return null;
+  const leaf = byUuid.get(leafUuid);
+  if (leaf === undefined) return null;
+  return walkFromLeaf(leaf, ordered, byUuid);
+}
+
+function collectMessages(thread: IdentifiedMessage[]): MessagePayload[] {
+  const messages: MessagePayload[] = [];
+  for (const rawMessage of thread) {
+    const message = toMessage(rawMessage, rawMessage.uuid);
+    if (message !== null) messages.push(message);
+  }
+  return messages;
 }
 
 export class ClaudeNormalizer implements ConversationNormalizer {
@@ -115,11 +194,9 @@ export class ClaudeNormalizer implements ConversationNormalizer {
     const createdAt = conv.created_at;
     if (typeof createdAt !== "string" || Number.isNaN(Date.parse(createdAt))) return null;
 
-    const messages: MessagePayload[] = [];
-    for (const rawMessage of orderedMessages(conv)) {
-      const message = toMessage(rawMessage);
-      if (message !== null) messages.push(message);
-    }
+    const thread = activeThread(conv);
+    if (thread === null) return null;
+    const messages = collectMessages(thread);
     if (messages.length === 0) return null;
 
     const updatedAt = conv.updated_at;

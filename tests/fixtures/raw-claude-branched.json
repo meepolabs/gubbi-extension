@@ -1,0 +1,117 @@
+{
+  "uuid": "claude-conv-branched",
+  "name": "Name a hiking club",
+  "created_at": "2026-06-06T10:00:00.000000Z",
+  "updated_at": "2026-06-06T10:02:05.000000Z",
+  "current_leaf_message_uuid": "branch-msg-6",
+  "chat_messages": [
+    {
+      "uuid": "branch-msg-1",
+      "text": "Suggest a name for a hiking club.",
+      "content": [
+        {
+          "type": "text",
+          "text": "Suggest a name for a hiking club.",
+          "citations": []
+        }
+      ],
+      "sender": "human",
+      "index": 0,
+      "created_at": "2026-06-06T10:00:00.000000Z",
+      "updated_at": "2026-06-06T10:00:00.000000Z",
+      "attachments": [],
+      "files": [],
+      "parent_message_uuid": "00000000-0000-4000-8000-000000000000"
+    },
+    {
+      "uuid": "branch-msg-2",
+      "text": "How about Trail Blazers?",
+      "content": [
+        {
+          "type": "text",
+          "text": "How about Trail Blazers?",
+          "citations": []
+        }
+      ],
+      "sender": "assistant",
+      "index": 1,
+      "created_at": "2026-06-06T10:00:05.000000Z",
+      "updated_at": "2026-06-06T10:00:05.000000Z",
+      "attachments": [],
+      "files": [],
+      "parent_message_uuid": "branch-msg-1"
+    },
+    {
+      "uuid": "branch-msg-3",
+      "text": "Something about mountains instead.",
+      "content": [
+        {
+          "type": "text",
+          "text": "Something about mountains instead.",
+          "citations": []
+        }
+      ],
+      "sender": "human",
+      "index": 2,
+      "created_at": "2026-06-06T10:01:00.000000Z",
+      "updated_at": "2026-06-06T10:01:00.000000Z",
+      "attachments": [],
+      "files": [],
+      "parent_message_uuid": "branch-msg-2"
+    },
+    {
+      "uuid": "branch-msg-4",
+      "text": "DISCARDED reply: Peak Seekers.",
+      "content": [
+        {
+          "type": "text",
+          "text": "DISCARDED reply: Peak Seekers.",
+          "citations": []
+        }
+      ],
+      "sender": "assistant",
+      "index": 3,
+      "created_at": "2026-06-06T10:01:05.000000Z",
+      "updated_at": "2026-06-06T10:01:05.000000Z",
+      "attachments": [],
+      "files": [],
+      "parent_message_uuid": "branch-msg-3"
+    },
+    {
+      "uuid": "branch-msg-5",
+      "text": "Something about rivers instead.",
+      "content": [
+        {
+          "type": "text",
+          "text": "Something about rivers instead.",
+          "citations": []
+        }
+      ],
+      "sender": "human",
+      "index": 4,
+      "created_at": "2026-06-06T10:02:00.000000Z",
+      "updated_at": "2026-06-06T10:02:00.000000Z",
+      "attachments": [],
+      "files": [],
+      "parent_message_uuid": "branch-msg-2"
+    },
+    {
+      "uuid": "branch-msg-6",
+      "text": "Try Current Walkers.",
+      "content": [
+        {
+          "type": "text",
+          "text": "Try Current Walkers.",
+          "citations": []
+        }
+      ],
+      "sender": "assistant",
+      "index": 5,
+      "created_at": "2026-06-06T10:02:05.000000Z",
+      "updated_at": "2026-06-06T10:02:05.000000Z",
+      "attachments": [],
+      "files": [],
+      "parent_message_uuid": "branch-msg-5"
+    }
+  ]
+}

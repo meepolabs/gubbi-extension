@@ -11,7 +11,8 @@ import { ConversationPayloadSchema, type MessagePayload, type Role } from "../..
 //     current_node, mapping: { <nodeId>: { id, message, parent, children } } }
 // A node.message may be null (root/empty nodes). The ACTIVE LEAF is walked by
 // following node.parent from current_node up to the root, then reversing to get
-// chronological order -- this ignores sibling regeneration branches (v1).
+// chronological order -- this ignores sibling regeneration branches. Each
+// message is sent with its node id as message_id.
 //
 // TEXT-ONLY rule: journal only the plain text of messages whose author.role is
 // user / assistant / system AND whose content_type is "text". Everything else
@@ -82,25 +83,30 @@ function renderTextContent(content: RawContent | null | undefined): string {
 }
 
 // Walks from current_node up through parents to the root, returning node ids in
-// chronological (root-first) order. Bounded by mapping size to defend against a
-// malformed parent cycle.
-function activeLeafNodeIds(conv: RawConversation): string[] {
+// chronological (root-first) order. The server appends unseen message ids and
+// never deletes, so a partial path would be permanent: a cycle, a node missing
+// from the mapping, or running past the mapping size returns null instead.
+function activeLeafNodeIds(conv: RawConversation): string[] | null {
   const mapping = conv.mapping ?? {};
   const ids: string[] = [];
   const seen = new Set<string>();
-  let cursor: string | undefined = conv.current_node;
   const maxHops = Object.keys(mapping).length + 1;
-  for (let hop = 0; hop < maxHops && cursor !== undefined; hop += 1) {
-    if (seen.has(cursor)) break;
+  let cursor: string | null | undefined = conv.current_node;
+  if (typeof cursor !== "string") return null;
+  while (typeof cursor === "string") {
+    if (seen.has(cursor) || ids.length >= maxHops) return null;
+    const node: RawNode | undefined = Object.prototype.hasOwnProperty.call(mapping, cursor)
+      ? mapping[cursor]
+      : undefined;
+    if (node === undefined) return null;
     seen.add(cursor);
     ids.push(cursor);
-    const node: RawNode | undefined = mapping[cursor];
-    cursor = node?.parent ?? undefined;
+    cursor = node.parent;
   }
   return ids.reverse();
 }
 
-function nodeToMessage(node: RawNode | undefined): MessagePayload | null {
+function nodeToMessage(node: RawNode | undefined, nodeId: string): MessagePayload | null {
   const message = node?.message;
   if (!message) return null;
   const role = mapRole(message.author?.role);
@@ -108,14 +114,18 @@ function nodeToMessage(node: RawNode | undefined): MessagePayload | null {
   const content = renderTextContent(message.content);
   if (content.length === 0) return null;
   const timestamp = epochSecondsToIso(message.create_time);
-  return timestamp === null ? { role, content } : { role, content, timestamp };
+  return timestamp === null
+    ? { role, content, message_id: nodeId }
+    : { role, content, message_id: nodeId, timestamp };
 }
 
-function collectMessages(conv: RawConversation): MessagePayload[] {
+function collectMessages(conv: RawConversation): MessagePayload[] | null {
   const mapping = conv.mapping ?? {};
+  const nodeIds = activeLeafNodeIds(conv);
+  if (nodeIds === null) return null;
   const messages: MessagePayload[] = [];
-  for (const id of activeLeafNodeIds(conv)) {
-    const message = nodeToMessage(mapping[id]);
+  for (const id of nodeIds) {
+    const message = nodeToMessage(mapping[id], id);
     if (message !== null) messages.push(message);
   }
   return messages;
@@ -135,7 +145,7 @@ export class ChatGptNormalizer implements ConversationNormalizer {
     if (createdAt === null) return null; // created_at is required by the schema.
 
     const messages = collectMessages(conv);
-    if (messages.length === 0) return null;
+    if (messages === null || messages.length === 0) return null;
 
     const candidate = {
       platform: "chatgpt" as const,

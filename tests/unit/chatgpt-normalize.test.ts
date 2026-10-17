@@ -167,4 +167,44 @@ describe("ChatGptNormalizer", () => {
     expect(normalizer.normalizeConversation(null)).toBeNull();
     expect(normalizer.normalizeConversation("not-json")).toBeNull();
   });
+
+  it("sends each surviving message with its node id as message_id", () => {
+    // Arrange
+    const raw = cloneRaw();
+
+    // Act
+    const result = normalizer.normalizeConversation(raw)!;
+
+    // Assert
+    expect(result.messages.map((m) => m.message_id)).toEqual([
+      "node-system",
+      "node-user-1",
+      "node-assistant-final",
+    ]);
+  });
+
+  it.each([
+    {
+      name: "cycle in the parent chain",
+      mutate: (mapping: Record<string, { parent?: string | null }>) => {
+        mapping["node-system"]!.parent = "node-assistant-final";
+      },
+    },
+    {
+      name: "parent node missing from the mapping",
+      mutate: (mapping: Record<string, { parent?: string | null }>) => {
+        mapping["node-user-1"]!.parent = "node-not-in-mapping";
+      },
+    },
+  ])("returns null instead of a partial path on $name", ({ mutate }) => {
+    // Arrange
+    const raw = cloneRaw();
+    mutate(raw.mapping as Record<string, { parent?: string | null }>);
+
+    // Act
+    const result = normalizer.normalizeConversation(raw);
+
+    // Assert
+    expect(result).toBeNull();
+  });
 });

@@ -3,10 +3,20 @@ import { describe, expect, it } from "vitest";
 import { ConversationPayloadSchema } from "../../src/lib/schema/ingest";
 import { ClaudeNormalizer } from "../../src/lib/connectors/claude/normalize";
 
+import rawBranched from "../fixtures/raw-claude-branched.json";
 import rawConversation from "../fixtures/raw-claude-conversation.json";
 
 function cloneRaw(): Record<string, unknown> {
   return structuredClone(rawConversation) as Record<string, unknown>;
+}
+
+function cloneBranched(): Record<string, unknown> {
+  return structuredClone(rawBranched) as Record<string, unknown>;
+}
+
+function branchedMessage(raw: Record<string, unknown>, uuid: string): Record<string, unknown> {
+  const messages = raw.chat_messages as Array<Record<string, unknown>>;
+  return messages.find((m) => m.uuid === uuid)!;
 }
 
 const normalizer = new ClaudeNormalizer();
@@ -242,5 +252,115 @@ describe("ClaudeNormalizer", () => {
 
     // Assert
     expect(result.messages.map((m) => m.role)).toEqual(["assistant"]);
+  });
+
+  it("keeps only the active branch root-first, each message carrying its uuid", () => {
+    // Arrange: index order interleaves a discarded reply between the branches.
+    const raw = cloneBranched();
+
+    // Act
+    const result = normalizer.normalizeConversation(raw)!;
+
+    // Assert
+    expect(result.messages).toEqual([
+      {
+        role: "user",
+        content: "Suggest a name for a hiking club.",
+        message_id: "branch-msg-1",
+        timestamp: "2026-06-06T10:00:00.000000Z",
+      },
+      {
+        role: "assistant",
+        content: "How about Trail Blazers?",
+        message_id: "branch-msg-2",
+        timestamp: "2026-06-06T10:00:05.000000Z",
+      },
+      {
+        role: "user",
+        content: "Something about rivers instead.",
+        message_id: "branch-msg-5",
+        timestamp: "2026-06-06T10:02:00.000000Z",
+      },
+      {
+        role: "assistant",
+        content: "Try Current Walkers.",
+        message_id: "branch-msg-6",
+        timestamp: "2026-06-06T10:02:05.000000Z",
+      },
+    ]);
+    expect(result.messages.some((m) => m.content.includes("DISCARDED"))).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "cycle in the parent chain",
+      mutate: (raw: Record<string, unknown>) => {
+        branchedMessage(raw, "branch-msg-2").parent_message_uuid = "branch-msg-5";
+      },
+    },
+    {
+      name: "missing parent mid-path",
+      mutate: (raw: Record<string, unknown>) => {
+        branchedMessage(raw, "branch-msg-5").parent_message_uuid = "uuid-not-in-chat";
+      },
+    },
+    {
+      name: "leaf not among chat_messages",
+      mutate: (raw: Record<string, unknown>) => {
+        raw.current_leaf_message_uuid = "uuid-not-in-chat";
+      },
+    },
+    {
+      name: "non-string leaf",
+      mutate: (raw: Record<string, unknown>) => {
+        raw.current_leaf_message_uuid = 42;
+      },
+    },
+    {
+      name: "message without a uuid",
+      mutate: (raw: Record<string, unknown>) => {
+        delete branchedMessage(raw, "branch-msg-4").uuid;
+      },
+    },
+    {
+      name: "duplicate uuid",
+      mutate: (raw: Record<string, unknown>) => {
+        branchedMessage(raw, "branch-msg-4").uuid = "branch-msg-3";
+      },
+    },
+    {
+      name: "uuid over the message_id length bound",
+      mutate: (raw: Record<string, unknown>) => {
+        branchedMessage(raw, "branch-msg-6").uuid = "x".repeat(513);
+        raw.current_leaf_message_uuid = "x".repeat(513);
+      },
+    },
+  ])("returns null (drift) on $name", ({ mutate }) => {
+    // Arrange
+    const raw = cloneBranched();
+    mutate(raw);
+
+    // Act
+    const result = normalizer.normalizeConversation(raw);
+
+    // Assert
+    expect(result).toBeNull();
+  });
+
+  it("falls back to index order with ids when there is no leaf", () => {
+    // Arrange: present the messages out of index order and drop the leaf.
+    const raw = cloneRaw();
+    delete raw.current_leaf_message_uuid;
+    const messages = raw.chat_messages as unknown[];
+    raw.chat_messages = [messages[1], messages[0]];
+
+    // Act
+    const result = normalizer.normalizeConversation(raw)!;
+
+    // Assert
+    expect(result.messages.map((m) => [m.role, m.message_id])).toEqual([
+      ["user", "claude-msg-1"],
+      ["assistant", "claude-msg-2"],
+    ]);
   });
 });
