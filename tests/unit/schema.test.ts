@@ -231,6 +231,23 @@ describe("ingest id bounds", () => {
     ["message_id rejects an empty string", "message", "message_id", "", false],
     ["message_id rejects a lone surrogate", "message", "message_id", `abc${LONE_SURROGATE}`, false],
     ["message_id accepts null", "message", "message_id", null, true],
+    ["rejects a lone high surrogate at the end", "message", "message_id", "abc\uD83D", false],
+    [
+      "rejects a high surrogate followed by a non-surrogate",
+      "message",
+      "message_id",
+      "\uD83Dabc",
+      false,
+    ],
+    ["rejects a lone low surrogate at the start", "message", "message_id", "\uDE00abc", false],
+    ["accepts a valid surrogate pair", "message", "message_id", "a\uD83D\uDE00b", true],
+    [
+      "rejects a low surrogate followed by a high surrogate",
+      "message",
+      "message_id",
+      "\uDE00\uD83D",
+      false,
+    ],
   ] as Array<[string, "conversation" | "message", string, unknown, boolean]>)(
     "%s",
     (_name, level, field, value, expected) => {

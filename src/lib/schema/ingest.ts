@@ -14,8 +14,38 @@ export const MAX_CONVERSATIONS_PER_REQUEST = 50;
 // would count twice there).
 const EXTERNAL_ID_MAX_CODE_POINTS = 512;
 
+const HIGH_SURROGATE_MIN = 0xd800;
+const HIGH_SURROGATE_MAX = 0xdbff;
+const LOW_SURROGATE_MIN = 0xdc00;
+const LOW_SURROGATE_MAX = 0xdfff;
+
+function isHighSurrogate(unit: number): boolean {
+  return unit >= HIGH_SURROGATE_MIN && unit <= HIGH_SURROGATE_MAX;
+}
+
+function isLowSurrogate(unit: number): boolean {
+  return unit >= LOW_SURROGATE_MIN && unit <= LOW_SURROGATE_MAX;
+}
+
+// String.prototype.isWellFormed needs Chrome 111+, and the manifest sets no
+// minimum version, so the lone-surrogate check is done by hand.
+function hasNoLoneSurrogate(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const unit = value.charCodeAt(i);
+    if (isHighSurrogate(unit)) {
+      if (i + 1 >= value.length || !isLowSurrogate(value.charCodeAt(i + 1))) {
+        return false;
+      }
+      i++;
+    } else if (isLowSurrogate(unit)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function isBoundedWellFormedId(value: string): boolean {
-  if (!value.isWellFormed()) {
+  if (!hasNoLoneSurrogate(value)) {
     return false;
   }
   const codePoints = [...value].length;
