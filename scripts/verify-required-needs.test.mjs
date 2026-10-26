@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { AGGREGATOR, findNeedsProblems, parseJobs } from "./verify-required-needs.mjs";
 
@@ -98,5 +98,32 @@ describe("ci.yml wiring", () => {
     assert.ok(job.body.some(({ text }) => /^ {4}timeout-minutes: 5\s*$/.test(text)));
     const checkout = steps.find((step) => step.fields.get("uses")?.startsWith("actions/checkout@"));
     assert.equal(checkout.with.get("persist-credentials"), "false");
+  });
+});
+
+describe("security workflow wiring", () => {
+  const workflowsDir = new URL("../.github/workflows/", import.meta.url);
+  const security = readFileSync(new URL("security.yml", workflowsDir), "utf8");
+  const ci = readFileSync(new URL("ci.yml", workflowsDir), "utf8");
+
+  it("ci.yml and security.yml are the only workflows", () => {
+    assert.deepEqual(readdirSync(workflowsDir).sort(), ["ci.yml", "security.yml"]);
+  });
+
+  it("security.yml runs the shared security-floor action", () => {
+    assert.match(security, /^ {2}security-floor:\s*$/m);
+    assert.match(
+      security,
+      /^\s*- uses: meepolabs\/meepolabs-conventions\/actions\/security-floor@[0-9a-f]{40}\s/m,
+    );
+  });
+
+  it("no ci.yml job calls a local workflow, so the scan is never a lane of required", () => {
+    const callers = parseJobs(ci)
+      .jobs.filter(({ body }) =>
+        body.some(({ text }) => /^ {4}uses:\s*\.\/\.github\/workflows\//.test(text)),
+      )
+      .map(({ id }) => id);
+    assert.deepEqual(callers, []);
   });
 });

@@ -36,19 +36,14 @@ jobs:
       - name: Verify
         run: pnpm verify
 
-  secret-scan:
-    name: secret scan
-    uses: ./.github/workflows/gitleaks.yml
-    permissions:
-      contents: read
-      pull-requests: read
-    secrets: inherit
-
-  # The single context branch protection requires. Every other job in this
-  # file must be listed under `needs:`; the completeness check runs here, not
-  # only inside `verify`, so dropping a lane from `needs:` cannot also drop
-  # the check. `always()` makes it report even when a dependency fails or is
-  # skipped, so a missing lane reads as red rather than as pending.
+  # The one check branch protection requires from this workflow; the secret
+  # and dependency scans run in security.yml (the `security-floor` check),
+  # outside `required`, and the branch rule requires that check directly.
+  # Every other job in this file must be listed under `needs:`; the
+  # completeness check runs here, not only inside `verify`, so dropping a
+  # lane from `needs:` cannot also drop the check. `always()` makes it report
+  # even when a dependency fails or is skipped, so a missing lane reads as red
+  # rather than as pending.
   required:
     name: required
     runs-on: ubuntu-latest
@@ -56,7 +51,6 @@ jobs:
     if: ${{ always() }}
     needs:
       - verify
-      - secret-scan
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3

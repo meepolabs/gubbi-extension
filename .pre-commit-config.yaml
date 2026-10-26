@@ -31,8 +31,8 @@ repos:
         types_or: [javascript, ts]
         require_serial: true
 
-  # Secret scanning at commit time. The CI gitleaks step is the
-  # second line of defense; this hook catches leaks before they reach
+  # Secret scanning at commit time. The `security-floor` check in CI is
+  # the second line of defense; this hook catches leaks before they reach
   # the remote.
   - repo: https://github.com/gitleaks/gitleaks
     rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # frozen: v8.30.1
