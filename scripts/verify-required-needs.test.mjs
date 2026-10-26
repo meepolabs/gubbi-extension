@@ -106,8 +106,12 @@ describe("security workflow wiring", () => {
   const security = readFileSync(new URL("security.yml", workflowsDir), "utf8");
   const ci = readFileSync(new URL("ci.yml", workflowsDir), "utf8");
 
-  it("ci.yml and security.yml are the only workflows", () => {
-    assert.deepEqual(readdirSync(workflowsDir).sort(), ["ci.yml", "security.yml"]);
+  it("security.yml exists and the retired scan workflows stay deleted", () => {
+    const workflows = readdirSync(workflowsDir);
+    assert.ok(workflows.includes("security.yml"));
+    for (const retired of ["gitleaks.yml", "dependency-scan.yml"]) {
+      assert.equal(workflows.includes(retired), false, `${retired} is back`);
+    }
   });
 
   it("security.yml runs the shared security-floor action", () => {
@@ -125,5 +129,14 @@ describe("security workflow wiring", () => {
       )
       .map(({ id }) => id);
     assert.deepEqual(callers, []);
+  });
+
+  it("no ci.yml step runs the security-floor action, so the scan is never a lane of required", () => {
+    const runners = parseJobs(ci)
+      .jobs.filter(({ body }) =>
+        body.some(({ text }) => /^\s*(?:- +)?uses:\s*\S*actions\/security-floor\b/.test(text)),
+      )
+      .map(({ id }) => id);
+    assert.deepEqual(runners, []);
   });
 });

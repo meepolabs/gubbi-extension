@@ -36,9 +36,9 @@ jobs:
       - name: Verify
         run: pnpm verify
 
-  # The one check branch protection requires from this workflow; the secret
-  # and dependency scans run in security.yml (the `security-floor` check),
-  # outside `required`, and the branch rule requires that check directly.
+  # `required` is this workflow's aggregator context. The secret and
+  # dependency scans run in security.yml, whose `security-floor` check is a
+  # separate status outside `required`.
   # Every other job in this file must be listed under `needs:`; the
   # completeness check runs here, not only inside `verify`, so dropping a
   # lane from `needs:` cannot also drop the check. `always()` makes it report

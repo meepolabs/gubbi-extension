@@ -146,7 +146,8 @@ CI (`.github/workflows/ci.yml`) runs `pnpm verify` -- a whole-tree format
 check (`pnpm format:check`, i.e. `prettier --check .`), the `required.needs`
 completeness check, type-check, lint, tests, build, and the manifest gate. A
 terminal `required` job succeeds only when every one of those jobs succeeded;
-it is the one check branch protection requires from `ci.yml`.
+it is the aggregator context `ci.yml` reports. Branch protection on `main`
+requires it and, as a separate status, the `security-floor` check.
 Run `pnpm format` to fix formatting before pushing. Any new CI job must be
 added to `required.needs`: `scripts/verify-required-needs.mjs` fails
 otherwise, and runs inside the `required` job itself as well as in
