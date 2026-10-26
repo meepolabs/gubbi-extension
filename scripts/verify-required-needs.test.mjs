@@ -134,7 +134,9 @@ describe("security workflow wiring", () => {
   it("no ci.yml step runs the security-floor action, so the scan is never a lane of required", () => {
     const runners = parseJobs(ci)
       .jobs.filter(({ body }) =>
-        body.some(({ text }) => /^\s*(?:- +)?uses:\s*\S*actions\/security-floor\b/.test(text)),
+        body.some(({ text }) =>
+          /^\s*(?:- +)?["']?uses["']?\s*:\s*["']?[^"'\s]*actions\/security-floor\b/.test(text),
+        ),
       )
       .map(({ id }) => id);
     assert.deepEqual(runners, []);
