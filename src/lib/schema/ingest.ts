@@ -93,9 +93,14 @@ function staysInRangeAfterUtc(value: string): boolean {
 }
 
 // zod's datetime admits year 0000, which the backend rejects. A timestamp with
-// no offset is treated as UTC by the backend.
-const TimestampSchema = z.iso
-  .datetime({ offset: true, local: true })
+// no offset is treated as UTC by the backend. zod requires seconds once a `Z` or
+// an offset is present, but the backend also accepts minute precision there, so
+// the precision -1 branch admits that form.
+const TimestampSchema = z
+  .union([
+    z.iso.datetime({ offset: true, local: true }),
+    z.iso.datetime({ offset: true, local: true, precision: -1 }),
+  ])
   .refine((value) => !value.startsWith("0000-"), { message: "year must be 0001 or later" })
   .refine(staysInRangeAfterUtc, {
     message: "must stay within years 0001-9999 once converted to UTC",

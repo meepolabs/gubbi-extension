@@ -44,6 +44,7 @@ const ACCEPTED_TIMESTAMPS: Array<[string, string]> = [
   ["negative zero offset", "2026-06-05T12:00:00-00:00"],
   ["naive (treated as UTC)", "2026-06-05T12:00:00"],
   ["minutes only", "2026-06-05T12:00"],
+  ["minutes only with Z suffix", "2026-06-05T12:00Z"],
   ["nine-digit fraction", "2026-06-05T12:00:00.123456789Z"],
   ["year 0001", "0001-01-01T00:00:00Z"],
   ["latest UTC instant", "9999-12-31T23:59:59.999999Z"],

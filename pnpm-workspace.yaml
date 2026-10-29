@@ -42,8 +42,9 @@ allowBuilds:
 # Review: 2027-02-28.
 overrides:
   # GHSA-w7jw-789q-3m8p (critical: quote() does not escape newlines),
-  # GHSA-395f-4hp3-45gv. Via fx-runner; no fixed parent exists.
-  shell-quote@<1.8.4: ">=1.8.4"
+  # GHSA-395f-4hp3-45gv, GHSA-pqg4-j6r4-53mv. Via fx-runner; no fixed parent
+  # exists.
+  shell-quote@<1.11.0: ">=1.11.0"
   # GHSA-ph9p-34f9-6g65 (path traversal via unsanitized prefix/postfix).
   tmp@<0.2.6: ">=0.2.6"
   # GHSA-xcpc-8h2w-3j85 (crafted ZIP triggers a 4GB allocation),
@@ -75,3 +76,9 @@ overrides:
   esbuild@<0.28.1: ">=0.28.1"
   # GHSA-w5hq-g745-h8pq (moderate).
   uuid@<11.1.1: ">=11.1.1"
+  # GHSA-587h-7wmj-h5pm, GHSA-698v-4r3x-3vcv, GHSA-9jrq-w75r-8gcw,
+  # GHSA-r825-w8mm-5pxw, GHSA-rq7h-c2jc-7f22. The direct devDependency is pinned
+  # on 7.x; this floor covers the second copy vite-node 6 (via wxt) pulls in,
+  # which requires ^8. Scoped to that parent: a bare `vite` key also rewrites
+  # the `^6 || ^7 || ^8` peer ranges of vitest and @vitest/mocker.
+  vite-node@6>vite: ">=8.1.6 <9"
