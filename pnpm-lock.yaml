@@ -5,7 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  shell-quote@<1.11.0: '>=1.11.0'
+  shell-quote@<1.11.0: '>=1.11.0 <2'
   tmp@<0.2.6: '>=0.2.6'
   adm-zip@<0.6.1: '>=0.6.1'
   nanoid@<3.3.16: '>=3.3.16'

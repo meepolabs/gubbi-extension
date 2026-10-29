@@ -44,7 +44,7 @@ overrides:
   # GHSA-w7jw-789q-3m8p (critical: quote() does not escape newlines),
   # GHSA-395f-4hp3-45gv, GHSA-pqg4-j6r4-53mv. Via fx-runner; no fixed parent
   # exists.
-  shell-quote@<1.11.0: ">=1.11.0"
+  shell-quote@<1.11.0: ">=1.11.0 <2"
   # GHSA-ph9p-34f9-6g65 (path traversal via unsanitized prefix/postfix).
   tmp@<0.2.6: ">=0.2.6"
   # GHSA-xcpc-8h2w-3j85 (crafted ZIP triggers a 4GB allocation),
