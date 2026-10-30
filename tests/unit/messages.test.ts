@@ -73,9 +73,10 @@ describe("FailureReason envelope round-trip", () => {
     "transient_http",
     "network",
     "malformed_response",
+    "org_ambiguous",
   ];
 
-  it("exposes exactly the six declared reasons", () => {
+  it("exposes exactly the declared reasons", () => {
     // Guards against a member being added to the union without updating the
     // runtime list (and vice versa).
     expect(new Set(FAILURE_REASONS)).toEqual(new Set(reasons));

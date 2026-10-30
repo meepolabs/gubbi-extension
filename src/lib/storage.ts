@@ -107,7 +107,14 @@ export type RefreshState = z.infer<typeof RefreshStateSchema>;
 // Per-platform backoff window: sync stays paused until `pausedUntil`.
 export const PauseStateSchema = z.object({
   pausedUntil: z.iso.datetime(),
-  reason: z.enum(["rate_limited", "drift", "transient", "session_lost", "waiting_for_tab"]),
+  reason: z.enum([
+    "rate_limited",
+    "drift",
+    "transient",
+    "session_lost",
+    "waiting_for_tab",
+    "org_ambiguous",
+  ]),
 });
 export type PauseState = z.infer<typeof PauseStateSchema>;
 

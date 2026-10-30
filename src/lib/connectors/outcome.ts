@@ -21,6 +21,7 @@ import { HTTP_FORBIDDEN, HTTP_UNAUTHORIZED } from "../net/http-constants";
 // falls back to transient_http (retryable) rather than guessing a terminal
 // reason.
 function classifyError(error: string): FailureReason {
+  if (error.includes("ambiguous") && error.includes("organization")) return "org_ambiguous";
   if (error.includes("network request failed")) return "network";
   if (error.includes("no active") && error.includes("session")) return "session_lost";
   const statusReason = classifyHttpStatus(error);

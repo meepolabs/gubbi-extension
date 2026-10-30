@@ -1,5 +1,6 @@
 import type { ConversationSummary, RawConversationFetcher, RawFetchOutcome } from "../base";
 import { fetchJson } from "../http";
+import { toFailure } from "../outcome";
 
 // Claude (claude.ai) content-safe raw fetcher.
 //
@@ -82,19 +83,23 @@ function isAtOrBeforeWatermark(updatedAt: string | null, since: string): boolean
   return itemMs <= sinceMs;
 }
 
-// v1 LIMITATION: an account may belong to several chat-capable orgs; selecting
-// among multiple CHAT orgs (e.g. team workspaces) is a post-v1 limitation; v1
-// uses the first chat-capable org. Orgs without the "chat" capability are
-// skipped entirely (their chat_conversations endpoint 403s). Returns an error
-// outcome when no chat-capable org exists (treated as no active session).
-async function fetchPrimaryOrgUuid(): Promise<RawFetchOutcome<string>> {
+const NO_CHAT_ORG_ERROR = "no active Claude session (no chat-capable organization)";
+const AMBIGUOUS_ORG_ERROR =
+  "ambiguous Claude organization (more than one chat-capable organization)";
+
+// Exactly one chat-capable org is used. Several chat orgs fail closed rather than
+// picking one: nothing in the payload reliably marks the personal workspace, and
+// syncing the wrong one would upload another workspace's conversations. Orgs
+// without the "chat" capability are ignored (their chat_conversations 403s).
+async function resolveChatOrgUuid(): Promise<RawFetchOutcome<string>> {
   const outcome = await fetchJson<RawOrganization[]>(ORGANIZATIONS_URL);
   if (outcome.status !== "ok") return outcome;
   const orgs = Array.isArray(outcome.data) ? outcome.data : [];
-  const chatOrg = orgs.find(isChatOrg);
-  const uuid = chatOrg?.uuid;
+  const chatOrgs = orgs.filter(isChatOrg);
+  if (chatOrgs.length > 1) return { status: "error", error: AMBIGUOUS_ORG_ERROR };
+  const uuid = chatOrgs[0]?.uuid;
   if (typeof uuid !== "string" || uuid.length === 0) {
-    return { status: "error", error: "no active Claude session (no chat-capable organization)" };
+    return { status: "error", error: NO_CHAT_ORG_ERROR };
   }
   return { status: "ok", data: uuid };
 }
@@ -102,19 +107,43 @@ async function fetchPrimaryOrgUuid(): Promise<RawFetchOutcome<string>> {
 export class ClaudeFetcher implements RawConversationFetcher {
   readonly platform = "claude" as const;
 
+  // The org resolved by the last list, reused by the detail fetches that follow
+  // it. Every list re-resolves, so a change in the account's orgs is seen once
+  // per sync rather than masked by a stale value.
+  private orgUuid: string | null = null;
+
   async isSessionActive(): Promise<boolean> {
-    const outcome = await fetchPrimaryOrgUuid();
+    const outcome = await this.resolveOrg();
     return outcome.status === "ok";
   }
 
+  private async resolveOrg(): Promise<RawFetchOutcome<string>> {
+    const outcome = await resolveChatOrgUuid();
+    this.orgUuid = outcome.status === "ok" ? outcome.data : null;
+    return outcome;
+  }
+
+  private async memoizedOrg(): Promise<RawFetchOutcome<string>> {
+    if (this.orgUuid !== null) return { status: "ok", data: this.orgUuid };
+    return this.resolveOrg();
+  }
+
+  private async orgScopedGet(url: string): Promise<RawFetchOutcome<unknown>> {
+    const outcome = await fetchJson<unknown>(url);
+    if (outcome.status === "error" && toFailure(outcome).reason === "session_lost") {
+      this.orgUuid = null;
+    }
+    return outcome;
+  }
+
   async listConversationsRaw(since?: string): Promise<RawFetchOutcome<ConversationSummary[]>> {
-    const orgOutcome = await fetchPrimaryOrgUuid();
+    const orgOutcome = await this.resolveOrg();
     if (orgOutcome.status !== "ok") return orgOutcome;
 
     const collected: ConversationSummary[] = [];
     let offset = 0;
     for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
-      const pageOutcome = await fetchJson<unknown>(listPageUrl(orgOutcome.data, offset));
+      const pageOutcome = await this.orgScopedGet(listPageUrl(orgOutcome.data, offset));
       if (pageOutcome.status !== "ok") return pageOutcome;
       const body = pageOutcome.data;
       if (!isRawListPage(body)) {
@@ -140,8 +169,8 @@ export class ClaudeFetcher implements RawConversationFetcher {
   }
 
   async fetchConversationRaw(id: string): Promise<RawFetchOutcome<unknown>> {
-    const orgOutcome = await fetchPrimaryOrgUuid();
+    const orgOutcome = await this.memoizedOrg();
     if (orgOutcome.status !== "ok") return orgOutcome;
-    return fetchJson<unknown>(detailUrl(orgOutcome.data, id));
+    return this.orgScopedGet(detailUrl(orgOutcome.data, id));
   }
 }

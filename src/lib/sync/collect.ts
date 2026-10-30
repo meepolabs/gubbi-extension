@@ -164,6 +164,7 @@ function emptyFailureCounts(): FailureCounts {
     transient_http: 0,
     network: 0,
     malformed_response: 0,
+    org_ambiguous: 0,
   };
 }
 

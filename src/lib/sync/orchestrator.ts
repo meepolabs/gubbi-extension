@@ -18,6 +18,7 @@ import {
   setPlatformLastRunAt,
   setStatus,
   SYNC_LEASE_KEY,
+  type PauseState,
 } from "../storage";
 import {
   INGEST_MAX_BODY_BYTES,
@@ -512,7 +513,7 @@ function rateLimitBackoffMs(retryAfterSeconds: number | null | undefined): numbe
 async function pause(
   deps: RunSyncDeps,
   platform: AdapterPlatform,
-  reason: "rate_limited" | "drift" | "transient" | "session_lost" | "waiting_for_tab",
+  reason: PauseState["reason"],
   untilMs: number,
 ): Promise<void> {
   await setPauseState(platform, { pausedUntil: isoFromMs(untilMs), reason });
@@ -818,6 +819,10 @@ async function consumeCollectOutcome(
     if (upload.kind === "paused") return "continue";
     if (outcome.reason === "session_lost") {
       await pause(deps, platform, "session_lost", deps.now() + DEFAULT_RATE_LIMIT_BACKOFF_MS);
+      return "continue";
+    }
+    if (outcome.reason === "org_ambiguous") {
+      await pause(deps, platform, "org_ambiguous", deps.now() + DEFAULT_DRIFT_BACKOFF_MS);
       return "continue";
     }
     const consecutive = await bumpTransientCount(platform);

@@ -45,6 +45,7 @@ describe("toConversationOutcome", () => {
 const errorCases: ReadonlyArray<[string, FailureReason]> = [
   ["no active ChatGPT session (missing accessToken)", "session_lost"],
   ["no active Claude session (no chat-capable organization)", "session_lost"],
+  ["ambiguous Claude organization (more than one chat-capable organization)", "org_ambiguous"],
   ["request failed with status 401", "session_lost"],
   ["request failed with status 403", "session_lost"],
   ["request failed with status 500", "transient_http"],

@@ -54,13 +54,17 @@ export interface SyncErrorMessage {
 //   transient_http      -- any other non-2xx response, retryable
 //   network             -- the request never completed (offline, DNS, redirect)
 //   malformed_response  -- a 2xx body that was not the expected shape
+//   org_ambiguous       -- the account has more than one chat-capable
+//                          organization and none is chosen by guessing; sync
+//                          stays paused until the account has exactly one
 export type FailureReason =
   | "no_tab"
   | "session_lost"
   | "rate_limited"
   | "transient_http"
   | "network"
-  | "malformed_response";
+  | "malformed_response"
+  | "org_ambiguous";
 
 // Runtime mirror of the FailureReason union. The Record below makes adding a
 // member to the union without listing it here a tsc error, so this list stays
@@ -72,6 +76,7 @@ const FAILURE_REASON_PRESENCE: Record<FailureReason, true> = {
   transient_http: true,
   network: true,
   malformed_response: true,
+  org_ambiguous: true,
 };
 
 export const FAILURE_REASONS: readonly FailureReason[] = Object.keys(

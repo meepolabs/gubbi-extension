@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatGptFetcher } from "../../src/lib/connectors/chatgpt/fetch";
 import { ClaudeFetcher } from "../../src/lib/connectors/claude/fetch";
 import { resetSourceRequestTiming, setSourceRequestTiming } from "../../src/lib/connectors/http";
-import { toListOutcome } from "../../src/lib/connectors/outcome";
+import { toConversationOutcome, toListOutcome } from "../../src/lib/connectors/outcome";
 
 import rawListPage1 from "../fixtures/raw-claude-list-page-1.json";
 import rawListPage2 from "../fixtures/raw-claude-list-page-2.json";
@@ -383,32 +383,121 @@ describe("ClaudeFetcher", () => {
     expect(spy.mock.calls.every(([url]) => !String(url).includes("org-api"))).toBe(true);
   });
 
-  it("picks the first chat-capable org when more than one exists", async () => {
+  it("fails closed as org_ambiguous when more than one chat-capable org exists", async () => {
     // Arrange
-    const spy = vi.fn();
+    const urls: string[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = typeof input === "string" ? input : input.toString();
-      spy(url);
+      urls.push(url);
       if (url.endsWith("/api/organizations")) {
-        return Promise.resolve(
-          jsonResponse([
-            { uuid: "org-api", capabilities: ["api"] },
-            { uuid: "org-chat-1", capabilities: ["chat"] },
-            { uuid: "org-chat-2", capabilities: ["chat"] },
-          ]),
-        );
+        return Promise.resolve(jsonResponse(TWO_CHAT_ORGS));
       }
       return Promise.resolve(jsonResponse(EMPTY_FINAL_PAGE));
     });
 
     // Act
-    await new ClaudeFetcher().listConversationsRaw();
+    const outcome = await new ClaudeFetcher().listConversationsRaw();
 
     // Assert
-    const listCall = spy.mock.calls.find(([url]) => String(url).includes("/chat_conversations"));
-    expect(listCall).toBeDefined();
-    expect(String(listCall![0])).toContain("/organizations/org-chat-1/");
-    expect(String(listCall![0])).not.toContain("org-chat-2");
+    expect(outcome.status).toBe("error");
+    expect(toListOutcome(outcome)).toEqual({ ok: false, reason: "org_ambiguous" });
+    expect(urls.filter((u) => u.includes("/chat_conversations"))).toEqual([]);
+  });
+
+  it("resolves the org once for one list and every detail fetch after it", async () => {
+    // Arrange
+    const urls = stubClaudeList(() => jsonResponse(rawListPage2));
+    const fetcher = new ClaudeFetcher();
+
+    // Act
+    await fetcher.listConversationsRaw();
+    const details = await Promise.all(
+      ["c1", "c2", "c3"].map((id) => fetcher.fetchConversationRaw(id)),
+    );
+
+    // Assert
+    expect(details.every((d) => d.status === "ok")).toBe(true);
+    expect(organizationUrls(urls)).toHaveLength(1);
+    expect(detailUrls(urls)).toHaveLength(3);
+  });
+
+  it("re-resolves the org on the next detail after a detail 403", async () => {
+    // Arrange
+    const urls: string[] = [];
+    let detailCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      urls.push(url);
+      if (url.endsWith("/api/organizations")) {
+        return Promise.resolve(jsonResponse([{ uuid: "org-chat", capabilities: ["chat"] }]));
+      }
+      if (url.includes("/chat_conversations_v2"))
+        return Promise.resolve(jsonResponse(rawListPage2));
+      detailCalls += 1;
+      return Promise.resolve(
+        detailCalls === 1 ? new Response(null, { status: 403 }) : jsonResponse({}),
+      );
+    });
+    const fetcher = new ClaudeFetcher();
+
+    // Act
+    await fetcher.listConversationsRaw();
+    const denied = await fetcher.fetchConversationRaw("c1");
+    const next = await fetcher.fetchConversationRaw("c2");
+
+    // Assert
+    expect(toConversationOutcome(denied)).toEqual({ ok: false, reason: "session_lost" });
+    expect(next.status).toBe("ok");
+    expect(organizationUrls(urls)).toHaveLength(2);
+  });
+
+  it("re-resolves the org on the next detail after a list page 401", async () => {
+    // Arrange
+    const urls: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      urls.push(url);
+      if (url.endsWith("/api/organizations")) {
+        return Promise.resolve(jsonResponse([{ uuid: "org-chat", capabilities: ["chat"] }]));
+      }
+      if (url.includes("/chat_conversations_v2")) {
+        return Promise.resolve(new Response(null, { status: 401 }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    const fetcher = new ClaudeFetcher();
+
+    // Act
+    const listed = await fetcher.listConversationsRaw();
+    await fetcher.fetchConversationRaw("c1");
+
+    // Assert
+    expect(toListOutcome(listed)).toEqual({ ok: false, reason: "session_lost" });
+    expect(organizationUrls(urls)).toHaveLength(2);
+  });
+
+  it("re-resolves the org on every list so a newly ambiguous account fails closed", async () => {
+    // Arrange
+    const orgBodies = [[{ uuid: "org-chat", capabilities: ["chat"] }], TWO_CHAT_ORGS];
+    let orgCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/api/organizations")) {
+        return Promise.resolve(jsonResponse(orgBodies[Math.min(orgCalls++, orgBodies.length - 1)]));
+      }
+      return Promise.resolve(jsonResponse(EMPTY_FINAL_PAGE));
+    });
+    const fetcher = new ClaudeFetcher();
+
+    // Act
+    const first = await fetcher.listConversationsRaw();
+    const second = await fetcher.listConversationsRaw();
+    const detail = await fetcher.fetchConversationRaw("c1");
+
+    // Assert
+    expect(first.status).toBe("ok");
+    expect(toListOutcome(second)).toEqual({ ok: false, reason: "org_ambiguous" });
+    expect(toConversationOutcome(detail)).toEqual({ ok: false, reason: "org_ambiguous" });
   });
 
   it("lists on chat_conversations_v2 with limit 50 and strong consistency", async () => {
@@ -513,6 +602,11 @@ describe("ClaudeFetcher", () => {
 });
 
 const EMPTY_FINAL_PAGE = { data: [], has_more: false };
+const TWO_CHAT_ORGS = [
+  { uuid: "org-api", capabilities: ["api"] },
+  { uuid: "org-chat-1", capabilities: ["chat"] },
+  { uuid: "org-chat-2", capabilities: ["chat"] },
+];
 const EXPECTED_MAX_LIST_PAGES = 50;
 
 // Serves a single chat-capable org and delegates every other request to
@@ -532,4 +626,12 @@ function stubClaudeList(listResponse: () => Response): string[] {
 
 function v2ListUrls(urls: string[]): string[] {
   return urls.filter((url) => url.includes("/chat_conversations_v2"));
+}
+
+function organizationUrls(urls: string[]): string[] {
+  return urls.filter((url) => url.endsWith("/api/organizations"));
+}
+
+function detailUrls(urls: string[]): string[] {
+  return urls.filter((url) => url.includes("/chat_conversations/"));
 }

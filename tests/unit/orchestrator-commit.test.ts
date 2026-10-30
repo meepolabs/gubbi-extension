@@ -81,6 +81,7 @@ function corpusCollect(corpus: readonly ConversationPayload[]): ReturnType<typeo
           transient_http: 0,
           network: 0,
           malformed_response: 0,
+          org_ambiguous: 0,
         },
       };
     },

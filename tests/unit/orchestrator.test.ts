@@ -13,7 +13,12 @@ import type { TokenProvider } from "../../src/lib/token-provider";
 import { runSync, type RunSyncDeps } from "../../src/lib/sync/orchestrator";
 import { INGEST_MAX_BODY_BYTES, serializeRequest } from "../../src/lib/api";
 import { ClaudeFetcher } from "../../src/lib/connectors/claude/fetch";
+import { makeContentMessageListener } from "../../src/lib/connectors/content-listener";
+import { resetSourceRequestTiming, setSourceRequestTiming } from "../../src/lib/connectors/http";
+import { collectFromTab } from "../../src/lib/sync/collect";
 import { stubChromeStorageWithEvents as stubChrome } from "../helpers/chrome-stub";
+
+import rawClaudeConversation from "../fixtures/raw-claude-conversation.json";
 
 // The orchestrator goes through storage.ts (cursor/counters/pause/events) and
 // locks.ts (lease), both of which use write-then-read-back and onChanged, so the
@@ -22,6 +27,7 @@ import { stubChromeStorageWithEvents as stubChrome } from "../helpers/chrome-stu
 // ---- Builders ----------------------------------------------------------------
 
 const NOW_MS = Date.parse("2026-06-06T12:00:00.000Z");
+const DRIFT_BACKOFF_MS = 30 * 60 * 1000;
 
 function emptyFailures(overrides: Partial<FailureCounts> = {}): FailureCounts {
   return {
@@ -31,6 +37,7 @@ function emptyFailures(overrides: Partial<FailureCounts> = {}): FailureCounts {
     transient_http: 0,
     network: 0,
     malformed_response: 0,
+    org_ambiguous: 0,
     ...overrides,
   };
 }
@@ -605,6 +612,28 @@ describe("collect failures", () => {
     },
   );
 
+  it("failed{org_ambiguous} -> pause org_ambiguous for the drift window, no transient bump", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const bundle = makeDeps();
+    bundle.collect.mockResolvedValue({
+      status: "failed",
+      reason: "org_ambiguous",
+      request: requestOf(),
+    });
+
+    // Act
+    await runSync({ platform: "claude", deps: bundle.deps });
+
+    // Assert
+    const paused = pauseOf(stub.store, "claude");
+    expect(paused?.reason).toBe("org_ambiguous");
+    expect(Date.parse(paused!.pausedUntil) - NOW_MS).toBe(DRIFT_BACKOFF_MS);
+    expect(stub.store["gubbi:transient:claude"]).toBeUndefined();
+    expect(bundle.upload).not.toHaveBeenCalled();
+    expect(bundle.statuses().at(-1)).toBe("paused");
+  });
+
   it("waiting_for_tab when no logged-in tab is found", async () => {
     // Arrange
     const stub = stubChrome();
@@ -617,6 +646,90 @@ describe("collect failures", () => {
     expect(bundle.collect).not.toHaveBeenCalled();
     expect(pauseOf(stub.store, "chatgpt")?.reason).toBe("waiting_for_tab");
     expect(bundle.statuses().at(-1)).toBe("paused");
+  });
+});
+
+// Drives the real content side: chrome.tabs.sendMessage is routed into the
+// Claude content listener backed by a real ClaudeFetcher over a stubbed fetch,
+// and the real collectFromTab is the orchestrator's collect.
+function routeTabsToClaudeContent(): void {
+  const listener = makeContentMessageListener("claude", new ClaudeFetcher());
+  const tabs = {
+    sendMessage: vi.fn(
+      (_tabId: number, message: unknown) =>
+        new Promise((resolve) => {
+          listener(message, undefined, resolve);
+        }),
+    ),
+  };
+  (globalThis as unknown as { chrome: Record<string, unknown> }).chrome.tabs = tabs;
+}
+
+function stubClaudeSite(organizations: unknown): string[] {
+  const urls: string[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    urls.push(url);
+    const body = url.endsWith("/api/organizations")
+      ? organizations
+      : url.includes("/chat_conversations_v2")
+        ? {
+            data: [{ uuid: "conv-1", name: "", updated_at: "2026-02-01T00:00:00Z" }],
+            has_more: false,
+          }
+        : rawClaudeConversation;
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+  });
+  return urls;
+}
+
+describe("Claude organization resolution through the content side", () => {
+  beforeEach(() => {
+    setSourceRequestTiming({ spacingMs: 0 });
+  });
+
+  afterEach(() => {
+    resetSourceRequestTiming();
+  });
+
+  it("pauses as org_ambiguous with no conversation requests when two chat orgs exist", async () => {
+    // Arrange
+    const stub = stubChrome();
+    routeTabsToClaudeContent();
+    const urls = stubClaudeSite([
+      { uuid: "org-chat-1", capabilities: ["chat"] },
+      { uuid: "org-chat-2", capabilities: ["chat"] },
+    ]);
+    const bundle = makeDeps({ collect: collectFromTab });
+
+    // Act
+    await runSync({ platform: "claude", deps: bundle.deps });
+
+    // Assert
+    expect(pauseOf(stub.store, "claude")?.reason).toBe("org_ambiguous");
+    expect(urls.filter((u) => u.includes("/chat_conversations"))).toEqual([]);
+    expect(bundle.upload).not.toHaveBeenCalled();
+    expect(bundle.statuses().at(-1)).toBe("paused");
+  });
+
+  it("syncs a single chat org end to end with one organizations request", async () => {
+    // Arrange
+    const stub = stubChrome();
+    routeTabsToClaudeContent();
+    const urls = stubClaudeSite([
+      { uuid: "org-chat", capabilities: ["chat"] },
+      { uuid: "org-api", capabilities: ["api"] },
+    ]);
+    const bundle = makeDeps({ collect: collectFromTab });
+
+    // Act
+    await runSync({ platform: "claude", deps: bundle.deps });
+
+    // Assert
+    expect(bundle.upload).toHaveBeenCalledTimes(1);
+    expect(pauseOf(stub.store, "claude")).toBeUndefined();
+    expect(urls.filter((u) => u.endsWith("/api/organizations"))).toHaveLength(1);
+    expect(bundle.statuses().at(-1)).toBe("idle");
   });
 });
 

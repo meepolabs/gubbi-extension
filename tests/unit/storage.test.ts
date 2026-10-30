@@ -263,6 +263,19 @@ describe("pauseState (per-platform namespacing)", () => {
     expect(store["gubbi:pauseState:claude"]).toEqual(claude);
   });
 
+  it("round-trips an org_ambiguous pause", async () => {
+    // Arrange
+    const store: Record<string, unknown> = {};
+    stubPersistentStorage(store);
+    const ambiguous: PauseState = { pausedUntil: "2026-06-06T13:00:00Z", reason: "org_ambiguous" };
+
+    // Act
+    await setPauseState("claude", ambiguous);
+
+    // Assert
+    expect(await getPauseState("claude")).toEqual(ambiguous);
+  });
+
   it("returns undefined for an unknown reason enum value", async () => {
     // Arrange
     stubChromeStorage({
