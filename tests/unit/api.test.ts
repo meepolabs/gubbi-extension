@@ -18,6 +18,8 @@ vi.mock("../../src/lib/net/fetch", () => ({
 }));
 
 import { uploadConversations, INGEST_PATH, serializeRequest } from "../../src/lib/api";
+import { ReconnectRequiredError } from "../../src/lib/auth/errors";
+import { LockContendedError } from "../../src/lib/locks";
 
 const TOKEN = "ory_at_test-access-token";
 
@@ -273,11 +275,11 @@ describe("uploadConversations", () => {
     expect(init?.method).toBe("POST");
   });
 
-  it("maps a getAccessToken rejection to auth_unavailable without calling the network", async () => {
+  it("maps a ReconnectRequiredError from getAccessToken to auth_unavailable without calling the network", async () => {
     // Arrange
     const provider = fakeProvider({
       getAccessToken: vi.fn(async () => {
-        throw new Error("session lost");
+        throw new ReconnectRequiredError();
       }),
     });
 
@@ -288,6 +290,28 @@ describe("uploadConversations", () => {
     expect(outcome).toEqual({ status: "auth_unavailable" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["lock contention", () => new LockContendedError("gubbi:authLock")],
+    ["storage failure", () => new Error("storage write failed")],
+  ])(
+    "maps a %s from getAccessToken to token_unavailable without calling the network",
+    async (_label, makeError) => {
+      // Arrange
+      const provider = fakeProvider({
+        getAccessToken: vi.fn(async () => {
+          throw makeError();
+        }),
+      });
+
+      // Act
+      const outcome = await uploadConversations(requestWith(1), provider);
+
+      // Assert
+      expect(outcome).toEqual({ status: "token_unavailable" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("api module boundary", () => {

@@ -11,7 +11,8 @@ import type {
 import type { SyncStatusState } from "../../src/lib/messages";
 import type { TokenProvider } from "../../src/lib/token-provider";
 import { runSync, type RunSyncDeps } from "../../src/lib/sync/orchestrator";
-import { INGEST_MAX_BODY_BYTES, serializeRequest } from "../../src/lib/api";
+import { INGEST_MAX_BODY_BYTES, serializeRequest, uploadConversations } from "../../src/lib/api";
+import { LockContendedError } from "../../src/lib/locks";
 import { ClaudeFetcher } from "../../src/lib/connectors/claude/fetch";
 import { makeContentMessageListener } from "../../src/lib/connectors/content-listener";
 import { resetSourceRequestTiming, setSourceRequestTiming } from "../../src/lib/connectors/http";
@@ -370,6 +371,100 @@ describe("401 refresh-and-retry-once", () => {
     // Assert
     expect(bundle.upload).toHaveBeenCalledTimes(1);
     expect(cursorOf(stub.store, "chatgpt")).toBeUndefined();
+    expect(bundle.statuses().at(-1)).toBe("reconnect_required");
+  });
+});
+
+describe("token unavailable without a definitive rejection", () => {
+  it("forceRefresh rejecting with a plain Error after a 401 -> transient pause, no reconnect", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const tokenProvider = fakeProvider({
+      forceRefresh: vi.fn(async () => {
+        throw new Error("storage write failed");
+      }),
+    });
+    const bundle = makeDeps({ tokenProvider });
+    bundle.upload.mockResolvedValue({ status: "needs_refresh" });
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(bundle.upload).toHaveBeenCalledTimes(1);
+    expect(cursorOf(stub.store, "chatgpt")).toBeUndefined();
+    expect(pauseOf(stub.store, "chatgpt")?.reason).toBe("transient");
+    expect(bundle.statuses()).not.toContain("reconnect_required");
+    expect(bundle.statuses().at(-1)).toBe("paused");
+  });
+
+  it("forceRefresh rejecting with LockContendedError after a 401 -> transient pause, no reconnect", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const tokenProvider = fakeProvider({
+      forceRefresh: vi.fn(async () => {
+        throw new LockContendedError("gubbi:authLock");
+      }),
+    });
+    const bundle = makeDeps({ tokenProvider });
+    bundle.upload.mockResolvedValue({ status: "needs_refresh" });
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(pauseOf(stub.store, "chatgpt")?.reason).toBe("transient");
+    expect(bundle.statuses()).not.toContain("reconnect_required");
+  });
+
+  it("token_unavailable -> transient pause, cursor unchanged, no reconnect", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const bundle = makeDeps();
+    bundle.upload.mockResolvedValue({ status: "token_unavailable" });
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(cursorOf(stub.store, "chatgpt")).toBeUndefined();
+    expect(pauseOf(stub.store, "chatgpt")?.reason).toBe("transient");
+    expect(bundle.statuses()).not.toContain("reconnect_required");
+  });
+
+  it("getAccessToken rejecting with LockContendedError through the real upload client -> transient pause, no reconnect", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const tokenProvider = fakeProvider({
+      getAccessToken: vi.fn(async () => {
+        throw new LockContendedError("gubbi:authLock");
+      }),
+    });
+    const bundle = makeDeps({ tokenProvider, upload: uploadConversations });
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(tokenProvider.getAccessToken).toHaveBeenCalled();
+    expect(pauseOf(stub.store, "chatgpt")?.reason).toBe("transient");
+    expect(bundle.statuses()).not.toContain("reconnect_required");
+  });
+
+  it("getAccessToken rejecting with ReconnectRequiredError through the real upload client -> reconnect_required", async () => {
+    // Arrange
+    stubChrome();
+    const tokenProvider = fakeProvider({
+      getAccessToken: vi.fn(async () => {
+        throw new ReconnectRequiredError();
+      }),
+    });
+    const bundle = makeDeps({ tokenProvider, upload: uploadConversations });
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
     expect(bundle.statuses().at(-1)).toBe("reconnect_required");
   });
 });

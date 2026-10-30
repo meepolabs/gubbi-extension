@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import { ReconnectRequiredError } from "../auth/errors";
 import { tokenProvider as realTokenProvider } from "../auth/provider";
 import { logger } from "../logger";
 import { LockContendedError, withStorageLock } from "../locks";
@@ -35,7 +34,7 @@ import type {
 } from "../schema/ingest";
 import { MAX_CONVERSATIONS_PER_REQUEST } from "../schema/ingest";
 import type { SyncStatusState } from "../messages";
-import type { TokenProvider } from "../token-provider";
+import { ReconnectRequiredError, type TokenProvider } from "../token-provider";
 import { timestampMs } from "./timestamps";
 
 // Background sync orchestrator. Wakes on the 30-min alarm or a
@@ -634,17 +633,17 @@ async function uploadOneBatch(
     // retry THE SAME batch ONCE. A second 401 -- or a refresh that reports the
     // session is unrecoverable -- means re-pairing is required: stop the run.
     //
-    // forceRefresh now fails closed: its only rejection is ReconnectRequiredError
-    // (refresh has no transient/retry arm any more). The defensive catch-all keeps
-    // an UNEXPECTED throw from escaping past the lease wrapper unhandled -- it ends
-    // the run cleanly via reconnect (status set, lease released) instead.
+    // Only ReconnectRequiredError is a definitive rejection; any other throw
+    // (lock contention, storage) pauses as transient and retries on a later wake.
     try {
       await deps.tokenProvider.forceRefresh();
     } catch (error) {
-      if (!(error instanceof ReconnectRequiredError)) {
-        logger.error("unexpected forceRefresh failure", { platform, error: String(error) });
-      }
-      return reconnect(deps, platform);
+      if (error instanceof ReconnectRequiredError) return reconnect(deps, platform);
+      logger.warn("forceRefresh could not yield a token", {
+        platform,
+        error: error instanceof Error ? error.name : "unknown",
+      });
+      return applyUploadOutcome(deps, platform, batch, { status: "token_unavailable" });
     }
     outcome = await deps.upload(batch, deps.tokenProvider);
     if (outcome.status === "needs_refresh") return reconnect(deps, platform);
@@ -700,7 +699,8 @@ async function applyUploadOutcome(
     }
     case "transient_http":
     case "network":
-    case "malformed_response": {
+    case "malformed_response":
+    case "token_unavailable": {
       // No inner retry loop beyond the single 401 forceRefresh-retry-once. A
       // malformed 2xx body is treated as transient: back off and retry later.
       // The backoff grows with the persisted consecutive-transient streak.

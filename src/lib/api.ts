@@ -14,7 +14,7 @@ import {
   type IngestConversationRequest,
   type IngestConversationResponse,
 } from "./schema/ingest";
-import type { TokenProvider } from "./token-provider";
+import { ReconnectRequiredError, type TokenProvider } from "./token-provider";
 
 // Thin, typed ingest client. It POSTs one batch of conversations and maps the
 // single HTTP response to a discriminated outcome -- nothing more. It depends on
@@ -47,8 +47,9 @@ const API_ORIGIN = originOf(
 // Discriminated outcome of a single upload attempt. `ok` carries the full
 // validated response body -- `budget_exhausted: true` is still `ok` (a saved
 // batch with extraction paused, not a failure). `auth_unavailable` means the
-// provider could not yield a token (session lost / re-pairing required) so no
-// request was made; `needs_refresh` means the server rejected an otherwise-valid
+// provider definitively reported that re-pairing is required, and
+// `token_unavailable` that it failed to yield a token for any other reason (lock
+// contention, storage); no request was made in either case. `needs_refresh` means the server rejected an otherwise-valid
 // token (401) and a forced refresh + single retry is the orchestrator's call.
 export type UploadOutcome =
   | { readonly status: "ok"; readonly response: IngestConversationResponse }
@@ -59,7 +60,8 @@ export type UploadOutcome =
   | { readonly status: "network" }
   | { readonly status: "malformed_response" }
   | { readonly status: "oversize_batch" }
-  | { readonly status: "auth_unavailable" };
+  | { readonly status: "auth_unavailable" }
+  | { readonly status: "token_unavailable" };
 
 async function parseOkBody(response: Response): Promise<UploadOutcome> {
   let parsed: unknown;
@@ -104,8 +106,9 @@ export async function uploadConversations(
   let accessToken: string;
   try {
     accessToken = await tokenProvider.getAccessToken();
-  } catch {
-    return { status: "auth_unavailable" };
+  } catch (error) {
+    if (error instanceof ReconnectRequiredError) return { status: "auth_unavailable" };
+    return { status: "token_unavailable" };
   }
 
   const url = new URL(INGEST_PATH, API_ORIGIN).toString();
