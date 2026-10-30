@@ -124,36 +124,6 @@ describe("ChatGptFetcher", () => {
     // Assert
     expect(active).toBe(false);
   });
-
-  it("treats a JSON null list body as an empty page rather than crashing", async () => {
-    // Arrange: session is fine, but the conversations endpoint returns `null`.
-    routeFetch([
-      ["/api/auth/session", () => jsonResponse({ accessToken: "tok" })],
-      ["/backend-api/conversations", () => jsonResponse(null)],
-    ]);
-
-    // Act
-    const outcome = await new ChatGptFetcher().listConversationsRaw();
-
-    // Assert
-    expect(outcome.status).toBe("ok");
-    if (outcome.status === "ok") expect(outcome.data).toEqual([]);
-  });
-
-  it("treats a list body whose items is not an array as an empty page", async () => {
-    // Arrange
-    routeFetch([
-      ["/api/auth/session", () => jsonResponse({ accessToken: "tok" })],
-      ["/backend-api/conversations", () => jsonResponse({ items: "nope" })],
-    ]);
-
-    // Act
-    const outcome = await new ChatGptFetcher().listConversationsRaw();
-
-    // Assert
-    expect(outcome.status).toBe("ok");
-    if (outcome.status === "ok") expect(outcome.data).toEqual([]);
-  });
 });
 
 describe("ChatGptFetcher archived listing", () => {
@@ -270,6 +240,10 @@ describe("ChatGptFetcher archived listing", () => {
     ["a 500", () => new Response(null, { status: 500 }), "transient_http"],
     ["a 401", () => new Response(null, { status: 401 }), "session_lost"],
     ["a non-JSON body", () => new Response("<html>", { status: 200 }), "malformed_response"],
+    ["a JSON null body", () => jsonResponse(null), "malformed_response"],
+    ["a non-object body", () => jsonResponse(42), "malformed_response"],
+    ["a body without items", () => jsonResponse({}), "malformed_response"],
+    ["a non-array items", () => jsonResponse({ items: "nope" }), "malformed_response"],
   ] as const)(
     "maps %s from the archived pass like the first pass",
     async (_label, failing, reason) => {

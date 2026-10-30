@@ -148,12 +148,10 @@ async function requestConversation(
   return response;
 }
 
-// Per-reason tally of per-conversation failures observed during a run. A single
-// bad conversation never aborts the run (we keep going), but the reason is
-// recorded here so the orchestrator can detect drift -- e.g. a sudden spike in
-// session_lost across conversations signals a dead session, not one stray
-// malformed payload. Every FailureReason is present (zero when unseen) so
-// callers can index without an undefined check.
+// Per-reason tally of the per-conversation failures a run skipped over (today
+// only malformed_response; a retryable failure stops the run instead), so the
+// orchestrator can detect connector drift. Every FailureReason is present (zero
+// when unseen) so callers can index without an undefined check.
 export type FailureCounts = Record<FailureReason, number>;
 
 function emptyFailureCounts(): FailureCounts {
@@ -171,9 +169,9 @@ function emptyFailureCounts(): FailureCounts {
 // Outcome of driving one platform tab.
 //
 //   "ok"           -- the listing was driven to its end. `request` carries the
-//                     normalized conversations. `failures` tallies any
-//                     per-conversation non-429 failures that were skipped over
-//                     (drift signal, never fatal). `complete` is false only when
+//                     normalized conversations. `failures` tallies the
+//                     malformed conversations that were skipped over (drift
+//                     signal, never fatal). `complete` is false only when
 //                     the listing was paginated and a follow-up page remains
 //                     (see the pagination seam below); `nextSince` carries the
 //                     watermark the orchestrator passes back in to resume.
@@ -184,11 +182,11 @@ function emptyFailureCounts(): FailureCounts {
 //                     retryAfterSeconds is the server-advised wait (null when no
 //                     Retry-After header was present).
 //   "failed"       -- a non-429 LIST failure (session lost, network, 5xx, or a
-//                     malformed listing). The listing never produced summaries,
-//                     so `request` is empty; `reason` is the mapped FailureReason
-//                     the orchestrator branches on. This replaces the old
-//                     silent-failure path that laundered a real list failure into
-//                     an empty "ok" run.
+//                     malformed listing), with an empty `request`; or a
+//                     retryable non-429 CONVERSATION failure (session lost,
+//                     network, 5xx), with the oldest-first prefix collected
+//                     before it. `reason` is the mapped FailureReason the
+//                     orchestrator branches on.
 //
 // The orchestrator consumes this: on "ok" with complete=true it uploads and
 // finishes; on "ok" with complete=false it uploads then schedules a follow-up
@@ -217,10 +215,10 @@ export type CollectOutcome =
 // Drives one platform tab through list -> fetch -> normalize and returns a
 // CollectOutcome. Upload is intentionally NOT performed here (the orchestrator
 // owns it). Detail is fetched oldest first whatever order the platform lists in.
-// On the FIRST rate-limit (list or conversation) the run stops
-// immediately -- no further CONVERSATION_REQUESTs are issued -- and the partial
-// batch plus the backoff hint are returned so the orchestrator can upload what we
-// have and then back off. A tab disconnect or a shape-mismatched response from a
+// On the FIRST rate-limit (list or conversation), or the first retryable
+// conversation failure, the run stops immediately -- no further
+// CONVERSATION_REQUESTs are issued -- and the partial batch is returned so the
+// orchestrator can upload what we have and then back off. A tab disconnect or a shape-mismatched response from a
 // stale content script is mapped (in the request helpers above) to a structured
 // failed/transient outcome, never an uncaught exception.
 export async function collectFromTab(
@@ -249,22 +247,24 @@ export async function collectFromTab(
 
   const raws: unknown[] = [];
   const failures = emptyFailureCounts();
-  let conversationRetryAfterSeconds: number | null = null;
-  let conversationRateLimited = false;
+  let stop: DetailStop | null = null;
   for (const summary of detailOrder(listOutcome.summaries)) {
     const conversationResult = await requestConversation(tabId, platform, summary.platform_id);
     const conversationOutcome = extractRaw(conversationResult);
-    if (conversationOutcome.status === "rate_limited") {
-      conversationRateLimited = true;
-      conversationRetryAfterSeconds = conversationOutcome.retryAfterSeconds;
-      break; // stop on the first 429; do not hammer the provider further
-    }
     if (conversationOutcome.status === "ok") {
       raws.push(conversationOutcome.raw);
+    } else if (
+      conversationOutcome.status === "failed" &&
+      conversationOutcome.reason === "malformed_response"
+    ) {
+      // Retrying cannot fix a body the content script could not shape; count it
+      // as drift and move on rather than wedging the run on one conversation.
+      failures.malformed_response += 1;
     } else {
-      // A single non-429 failure (session lost / 5xx / network) never aborts the
-      // run; record its reason so the orchestrator can spot drift across the run.
-      failures[conversationOutcome.reason] += 1;
+      // Any other failure is retryable. Detail runs oldest first, so stopping
+      // here leaves an oldest prefix and the cursor never passes this one.
+      stop = conversationOutcome;
+      break;
     }
   }
 
@@ -276,8 +276,11 @@ export async function collectFromTab(
   }
   const request = assembleIngestRequest(platform, conversations);
 
-  if (conversationRateLimited) {
-    return { status: "rate_limited", retryAfterSeconds: conversationRetryAfterSeconds, request };
+  if (stop?.status === "rate_limited") {
+    return { status: "rate_limited", retryAfterSeconds: stop.retryAfterSeconds, request };
+  }
+  if (stop?.status === "failed") {
+    return { status: "failed", reason: stop.reason, request };
   }
 
   // INTENTIONAL PHASE-2 SEAM (accepted, not a TODO): pagination is a connector
@@ -293,7 +296,7 @@ export async function collectFromTab(
 }
 
 // The orchestrator commits the newest watermark it uploaded, so a run cut short
-// by a 429 must have collected an oldest prefix: otherwise the cursor jumps past
+// by a 429 or a retryable failure must have collected an oldest prefix: otherwise the cursor jumps past
 // the older conversations that were never fetched and they are never re-listed.
 // A missing or unparseable updated_at sorts first, so it can never be the one
 // left behind; ties keep list order (Array.prototype.sort is stable).
@@ -342,6 +345,8 @@ type ConversationExtract =
   | { status: "rate_limited"; retryAfterSeconds: number | null }
   | { status: "failed"; reason: FailureReason };
 
+type DetailStop = Exclude<ConversationExtract, { status: "ok" }>;
+
 function extractRaw(result: ConversationResultMessage): ConversationExtract {
   if (result.result.ok) return { status: "ok", raw: result.result.raw };
   if (result.result.reason === "rate_limited") {
@@ -360,7 +365,5 @@ function extractRaw(result: ConversationResultMessage): ConversationExtract {
     platform: result.platform,
     reason: result.result.reason,
   });
-  // Non-429 per-conversation failure: carry the reason up so the run can keep
-  // going while still tallying the failure for drift detection.
   return { status: "failed", reason: result.result.reason };
 }

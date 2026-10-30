@@ -59,6 +59,14 @@ function isAtOrBeforeWatermark(updatedAt: string | null, since: string): boolean
   return itemMs <= sinceMs;
 }
 
+// A 200 whose body is not an object carrying an `items` array is API drift, not
+// an empty listing: reading it as empty would end the walk and merge as valid.
+function listItemsOf(body: unknown): RawListItem[] | null {
+  if (typeof body !== "object" || body === null) return null;
+  const items = (body as { items?: unknown }).items;
+  return Array.isArray(items) ? (items as RawListItem[]) : null;
+}
+
 async function fetchAccessToken(): Promise<RawFetchOutcome<string>> {
   const outcome = await fetchJson<SessionResponse>(SESSION_URL);
   if (outcome.status !== "ok") return outcome;
@@ -88,14 +96,10 @@ async function listPass(
     const pageOutcome = await fetchJson<RawListPage>(url, headers);
     if (pageOutcome.status !== "ok") return pageOutcome;
 
-    // A 200 with a null/non-object body, or a missing/non-array `items`, must
-    // not crash; treat it as an empty page (which ends the walk below).
-    const items =
-      pageOutcome.data != null &&
-      typeof pageOutcome.data === "object" &&
-      Array.isArray((pageOutcome.data as { items?: unknown }).items)
-        ? (pageOutcome.data as { items: RawListItem[] }).items
-        : [];
+    const items = listItemsOf(pageOutcome.data);
+    if (items === null) {
+      return { status: "error", error: "unexpected ChatGPT list response shape" };
+    }
     if (items.length === 0) break;
 
     let reachedWatermark = false;

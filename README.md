@@ -5,10 +5,11 @@ chats into a searchable, structured diary by syncing conversations from ChatGPT
 (chatgpt.com) and Claude (claude.ai) to your gubbi account. It builds for both
 Chrome and Firefox as Manifest V3.
 
-This repository is the extension skeleton (Phase 1, task 1). The ingest wire
-schema, the outbound-fetch host guard, and the platform-adapter interface are
-implemented for real; connectors, sync orchestration, and UI are typed stubs that
-throw `not implemented` and are filled in across later phases.
+Implemented today: OAuth pairing with a gubbi account, ChatGPT and Claude
+connectors, background sync (a periodic alarm plus "Sync now") that uploads new
+conversations through the ingest API, and a minimal popup to pair, toggle each
+platform, sync, disconnect, and see per-platform status. The options page is
+still a placeholder.
 
 ## License
 
@@ -62,7 +63,7 @@ This boundary is enforced two ways, both CI gates:
 
 Host permissions are restricted to `https://chatgpt.com/*`,
 `https://claude.ai/*`, `https://api.gubbi.ai/*`, and `https://auth.gubbi.ai/*`.
-The extension requests `storage`, `alarms`, `scripting`, and `identity`; no
+The extension requests `storage`, `alarms`, and `identity`; no
 `cookies`, `webRequest`, `tabs`, or `<all_urls>` access.
 
 ## Toolchain: WXT
@@ -157,11 +158,12 @@ VITE_AUTH_HOST=auth.<your-deployment>.example.test
 ```
 
 ```sh
-pnpm verify && pnpm zip
+pnpm verify && pnpm zip && node scripts/verify-manifest.mjs
 ```
 
 `pnpm verify` builds with those values and checks both manifests against
-them; `pnpm zip` packages the same configuration. Remove `.env.local` before
+them; `pnpm zip` packages the same configuration. `pnpm zip` rebuilds
+`.output/` before zipping, so the final check verifies the tree that was zipped. Remove `.env.local` before
 building a production artifact: the verifier would otherwise accept the
 non-production hosts it was given.
 

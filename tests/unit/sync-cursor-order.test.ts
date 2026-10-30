@@ -21,6 +21,7 @@ import rawChatGpt from "../fixtures/raw-chatgpt-conversation.json";
 
 const TAB_ID = 7;
 const RETRY_AFTER_SECONDS = 60;
+const PAST_ANY_PAUSE_MS = 31 * 60 * 1000;
 
 const CONVERSATIONS = {
   oldest: "2026-01-01T00:00:00.000Z",
@@ -50,25 +51,34 @@ function newestFirstList(): ListResultMessage {
   };
 }
 
+type SecondDetailFailure = Exclude<ConversationResultMessage["result"], { ok: true }>;
+
+const RATE_LIMITED: SecondDetailFailure = {
+  ok: false,
+  reason: "rate_limited",
+  retryAfterSeconds: RETRY_AFTER_SECONDS,
+};
+
 function conversationResult(
   conversationId: string,
-  isSecondDetailRequest: boolean,
+  failure: SecondDetailFailure | null,
 ): ConversationResultMessage {
-  const result: ConversationResultMessage["result"] = isSecondDetailRequest
-    ? { ok: false, reason: "rate_limited", retryAfterSeconds: RETRY_AFTER_SECONDS }
-    : { ok: true, raw: rawConversation(conversationId as ConversationId) };
+  const result: ConversationResultMessage["result"] = failure ?? {
+    ok: true,
+    raw: rawConversation(conversationId as ConversationId),
+  };
   return { type: "CONVERSATION_RESULT", platform: "chatgpt", conversationId, result };
 }
 
 // Layers a tab onto the storage stub: the list is newest first and the second
-// detail request of the first run answers 429.
-function stubTab(): ReturnType<typeof vi.fn> {
+// detail request of the first run answers with `secondDetail`.
+function stubTab(secondDetail: SecondDetailFailure): ReturnType<typeof vi.fn> {
   let detailRequests = 0;
   const sendMessage = vi.fn(
     async (_tabId: number, message: ListRequestMessage | ConversationRequestMessage) => {
       if (message.type === "LIST_REQUEST") return newestFirstList();
       detailRequests += 1;
-      return conversationResult(message.conversationId, detailRequests === 2);
+      return conversationResult(message.conversationId, detailRequests === 2 ? secondDetail : null);
     },
   );
   vi.stubGlobal("chrome", { ...globalThis.chrome, tabs: { sendMessage } });
@@ -80,6 +90,16 @@ function listSinces(sendMessage: ReturnType<typeof vi.fn>): Array<string | undef
     .map(([, message]) => message as ListRequestMessage | ConversationRequestMessage)
     .filter((message): message is ListRequestMessage => message.type === "LIST_REQUEST")
     .map((message) => message.since);
+}
+
+function detailIdsPerRun(sendMessage: ReturnType<typeof vi.fn>): string[][] {
+  const runs: string[][] = [];
+  for (const [, message] of sendMessage.mock.calls) {
+    const typed = message as ListRequestMessage | ConversationRequestMessage;
+    if (typed.type === "LIST_REQUEST") runs.push([]);
+    else runs.at(-1)?.push(typed.conversationId);
+  }
+  return runs;
 }
 
 function makeDeps(clock: { nowMs: number }): {
@@ -128,7 +148,7 @@ describe("runSync with a detail fetch truncated by a 429", () => {
   it("commits the oldest watermark and re-lists from before every uncollected conversation", async () => {
     // Arrange
     const { store } = stubChromeStorageWithEvents();
-    const sendMessage = stubTab();
+    const sendMessage = stubTab(RATE_LIMITED);
     const clock = { nowMs: Date.parse("2026-06-06T12:00:00.000Z") };
     const { deps, upload } = makeDeps(clock);
 
@@ -148,4 +168,46 @@ describe("runSync with a detail fetch truncated by a 429", () => {
     expect(secondSinceMs).toBeLessThan(Date.parse(CONVERSATIONS.middle));
     expect(secondSinceMs).toBeLessThan(Date.parse(CONVERSATIONS.newest));
   });
+});
+
+describe("runSync with a detail fetch failing with a retryable non-429 error", () => {
+  it.each<{ name: string; failure: SecondDetailFailure; pauseReason: string }>([
+    { name: "5xx", failure: { ok: false, reason: "transient_http" }, pauseReason: "transient" },
+    { name: "network", failure: { ok: false, reason: "network" }, pauseReason: "transient" },
+    {
+      name: "session lost",
+      failure: { ok: false, reason: "session_lost" },
+      pauseReason: "session_lost",
+    },
+  ])(
+    "$name: commits only the oldest watermark and re-lists the failed conversation",
+    async ({ failure, pauseReason }) => {
+      // Arrange
+      const { store } = stubChromeStorageWithEvents();
+      const sendMessage = stubTab(failure);
+      const clock = { nowMs: Date.parse("2026-06-06T12:00:00.000Z") };
+      const { deps, upload } = makeDeps(clock);
+
+      // Act
+      await runSync({ platform: "chatgpt", deps });
+      const cursorAfterFailedRun = store["gubbi:cursor:chatgpt"];
+      const pauseAfterFailedRun = store["gubbi:pauseState:chatgpt"] as
+        | { reason?: string }
+        | undefined;
+      // Past the longest pause either reason sets, so the second run collects.
+      clock.nowMs += PAST_ANY_PAUSE_MS;
+      await runSync({ platform: "chatgpt", deps });
+
+      // Assert
+      const firstUpload = upload.mock.calls[0]?.[0] as IngestConversationRequest | undefined;
+      expect(firstUpload?.conversations.map((c) => c.platform_id)).toEqual(["oldest"]);
+      expect(cursorAfterFailedRun).toBe(CONVERSATIONS.oldest);
+      expect(pauseAfterFailedRun?.reason).toBe(pauseReason);
+      const [firstRunDetails, secondRunDetails] = detailIdsPerRun(sendMessage);
+      expect(firstRunDetails).toEqual(["oldest", "middle"]);
+      expect(secondRunDetails).toContain("middle");
+      const secondSinceMs = Date.parse(listSinces(sendMessage)[1] ?? "");
+      expect(secondSinceMs).toBeLessThan(Date.parse(CONVERSATIONS.middle));
+    },
+  );
 });

@@ -637,20 +637,36 @@ describe("rate limiting", () => {
     expect(bundle.statuses().at(-1)).toBe("paused");
   });
 
-  it("pauses for the 30 min default when Retry-After is not a number", async () => {
-    // Arrange
-    const stub = stubChrome();
-    const bundle = makeDeps();
-    bundle.upload.mockResolvedValue({ status: "rate_limited", retryAfterSeconds: Number.NaN });
+  it.each([
+    { name: "NaN from upload", via: "upload", retryAfterSeconds: Number.NaN },
+    { name: "a string from upload", via: "upload", retryAfterSeconds: "soon" },
+    { name: "a string from collect", via: "collect", retryAfterSeconds: "soon" },
+  ] as const)(
+    "pauses for the 30 min default when Retry-After is $name",
+    async ({ via, retryAfterSeconds }) => {
+      // Arrange: a stale content script can reply with any JSON value here.
+      const stub = stubChrome();
+      const bundle = makeDeps();
+      const hint = retryAfterSeconds as unknown as number;
+      if (via === "upload") {
+        bundle.upload.mockResolvedValue({ status: "rate_limited", retryAfterSeconds: hint });
+      } else {
+        bundle.collect.mockResolvedValue({
+          status: "rate_limited",
+          retryAfterSeconds: hint,
+          request: requestOf(),
+        });
+      }
 
-    // Act
-    await runSync({ platform: "chatgpt", deps: bundle.deps });
+      // Act
+      await runSync({ platform: "chatgpt", deps: bundle.deps });
 
-    // Assert
-    const pause = pauseOf(stub.store, "chatgpt");
-    expect(Date.parse(pause!.pausedUntil)).toBe(NOW_MS + 30 * 60_000);
-    expect(bundle.statuses().at(-1)).toBe("paused");
-  });
+      // Assert
+      const pause = pauseOf(stub.store, "chatgpt");
+      expect(Date.parse(pause!.pausedUntil)).toBe(NOW_MS + 30 * 60_000);
+      expect(bundle.statuses().at(-1)).toBe("paused");
+    },
+  );
 });
 
 describe("transient backoff growth (M4)", () => {

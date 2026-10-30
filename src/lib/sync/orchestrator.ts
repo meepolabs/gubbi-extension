@@ -506,14 +506,11 @@ function transientBackoffMs(consecutive: number, random: () => number): number {
 // clamped: floored so a "retry now" (0) or a tiny hint still yields a real pause
 // rather than an immediate re-hit of the API that just throttled us, and capped
 // so a huge hint (Infinity included) stays a representable, bounded pause. An
-// absent hint (null/undefined) or NaN carries no information and falls back to
-// the default window.
-function rateLimitBackoffMs(retryAfterSeconds: number | null | undefined): number {
-  if (
-    retryAfterSeconds === null ||
-    retryAfterSeconds === undefined ||
-    Number.isNaN(retryAfterSeconds)
-  ) {
+// absent hint, NaN, or any non-number carries no information and falls back to
+// the default window. The parameter is `unknown` because the collect-side hint
+// crosses the content-script message boundary unvalidated.
+function rateLimitBackoffMs(retryAfterSeconds: unknown): number {
+  if (typeof retryAfterSeconds !== "number" || Number.isNaN(retryAfterSeconds)) {
     return DEFAULT_RATE_LIMIT_BACKOFF_MS;
   }
   const advisedMs = retryAfterSeconds * 1000;
@@ -822,7 +819,7 @@ async function consumeCollectOutcome(
 ): Promise<PlatformResult> {
   const truncated: ListingScope = { isComplete: false, listedAtMs };
   if (outcome.status === "failed") {
-    // Upload whatever partial batch was collected before the list failure, then
+    // Upload whatever partial batch was collected before the failure, then
     // pause by the mapped reason. Cursor never advances past the uncollected
     // remainder -- commitBatch only moves it to the partial batch's watermark.
     const upload = await uploadBatches(deps, platform, outcome.request, truncated);
