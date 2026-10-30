@@ -157,6 +157,32 @@ function conversationRequestCount(spy: ReturnType<typeof vi.fn>): number {
   return spy.mock.calls.filter(([, message]) => message.type === "CONVERSATION_REQUEST").length;
 }
 
+function conversationRequestIds(spy: ReturnType<typeof vi.fn>): string[] {
+  return spy.mock.calls
+    .map(([, message]) => message as ListRequestMessage | ConversationRequestMessage)
+    .filter((message) => message.type === "CONVERSATION_REQUEST")
+    .map((message) => (message as ConversationRequestMessage).conversationId);
+}
+
+function datedList(summaries: ReadonlyArray<[string, string | null]>): ListResultMessage {
+  return {
+    type: "LIST_RESULT",
+    platform: "chatgpt",
+    result: {
+      ok: true,
+      summaries: summaries.map(([id, updatedAt]) => ({
+        platform_id: id,
+        title: id,
+        updated_at: updatedAt,
+      })),
+    },
+  };
+}
+
+function failingConversations(ids: string[]): Record<string, ConversationResultMessage> {
+  return Object.fromEntries(ids.map((id) => [id, failedConversation(id, "transient_http")]));
+}
+
 describe("collectFromTab", () => {
   beforeEach(() => {
     // Silence the deliberate warn emitted on rate-limit / skip paths.
@@ -380,5 +406,101 @@ describe("collectFromTab", () => {
       expect(outcome.request.conversations).toHaveLength(0);
       expect(outcome.failures.transient_http).toBe(1);
     }
+  });
+});
+
+describe("collectFromTab detail order", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it.each<{ name: string; listed: Array<[string, string | null]>; expected: string[] }>([
+    {
+      name: "newest-first listing",
+      listed: [
+        ["c3", "2026-03-01T00:00:00.000Z"],
+        ["c2", "2026-02-01T00:00:00.000Z"],
+        ["c1", "2026-01-01T00:00:00.000Z"],
+      ],
+      expected: ["c1", "c2", "c3"],
+    },
+    {
+      name: "unordered listing",
+      listed: [
+        ["c2", "2026-02-01T00:00:00.000Z"],
+        ["c3", "2026-03-01T00:00:00.000Z"],
+        ["c1", "2026-01-01T00:00:00.000Z"],
+      ],
+      expected: ["c1", "c2", "c3"],
+    },
+    {
+      name: "differing UTC offsets compare by instant",
+      listed: [
+        ["late", "2026-02-01T00:30:00.000Z"],
+        ["early", "2026-02-01T01:00:00.000+01:00"],
+      ],
+      expected: ["early", "late"],
+    },
+    {
+      name: "null updated_at first",
+      listed: [
+        ["c2", "2026-02-01T00:00:00.000Z"],
+        ["undated", null],
+        ["c1", "2026-01-01T00:00:00.000Z"],
+      ],
+      expected: ["undated", "c1", "c2"],
+    },
+    {
+      name: "unparseable updated_at first, like null",
+      listed: [
+        ["c1", "2026-01-01T00:00:00.000Z"],
+        ["garbled", "not-a-timestamp"],
+      ],
+      expected: ["garbled", "c1"],
+    },
+    {
+      name: "equal updated_at keeps list order",
+      listed: [
+        ["c3", "2026-03-01T00:00:00.000Z"],
+        ["tie-b", "2026-02-01T00:00:00.000Z"],
+        ["tie-a", "2026-02-01T00:00:00.000Z"],
+        ["undated-b", null],
+        ["undated-a", null],
+      ],
+      expected: ["undated-b", "undated-a", "tie-b", "tie-a", "c3"],
+    },
+  ])("requests detail oldest first: $name", async ({ listed, expected }) => {
+    // Arrange
+    const spy = stubTab({
+      list: datedList(listed),
+      conversationById: failingConversations(listed.map(([id]) => id)),
+    });
+
+    // Act
+    await collectFromTab(TAB_ID, "chatgpt");
+
+    // Assert
+    expect(conversationRequestIds(spy)).toEqual(expected);
+  });
+
+  it("leaves the listed summaries in their original order", async () => {
+    // Arrange
+    const list = datedList([
+      ["c2", "2026-02-01T00:00:00.000Z"],
+      ["c1", "2026-01-01T00:00:00.000Z"],
+    ]);
+    stubTab({ list, conversationById: failingConversations(["c1", "c2"]) });
+
+    // Act
+    await collectFromTab(TAB_ID, "chatgpt");
+
+    // Assert
+    const summaries = list.result.ok ? list.result.summaries : [];
+    expect(summaries.map((summary) => summary.platform_id)).toEqual(["c2", "c1"]);
   });
 });

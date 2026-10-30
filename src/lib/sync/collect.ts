@@ -177,9 +177,10 @@ function emptyFailureCounts(): FailureCounts {
 //                     watermark the orchestrator passes back in to resume.
 //   "rate_limited" -- a 429 (list OR conversation) short-circuited the run. The
 //                     request carries whatever was collected BEFORE the 429
-//                     (empty on a list-side 429, partial on a conversation-side
-//                     429); retryAfterSeconds is the server-advised wait (null
-//                     when no Retry-After header was present).
+//                     (empty on a list-side 429; on a conversation-side 429, an
+//                     oldest-first prefix of the listing, see detailOrder);
+//                     retryAfterSeconds is the server-advised wait (null when no
+//                     Retry-After header was present).
 //   "failed"       -- a non-429 LIST failure (session lost, network, 5xx, or a
 //                     malformed listing). The listing never produced summaries,
 //                     so `request` is empty; `reason` is the mapped FailureReason
@@ -213,7 +214,8 @@ export type CollectOutcome =
 
 // Drives one platform tab through list -> fetch -> normalize and returns a
 // CollectOutcome. Upload is intentionally NOT performed here (the orchestrator
-// owns it). On the FIRST rate-limit (list or conversation) the run stops
+// owns it). Detail is fetched oldest first whatever order the platform lists in.
+// On the FIRST rate-limit (list or conversation) the run stops
 // immediately -- no further CONVERSATION_REQUESTs are issued -- and the partial
 // batch plus the backoff hint are returned so the orchestrator can upload what we
 // have and then back off. A tab disconnect or a shape-mismatched response from a
@@ -247,7 +249,7 @@ export async function collectFromTab(
   const failures = emptyFailureCounts();
   let conversationRetryAfterSeconds: number | null = null;
   let conversationRateLimited = false;
-  for (const summary of listOutcome.summaries) {
+  for (const summary of detailOrder(listOutcome.summaries)) {
     const conversationResult = await requestConversation(tabId, platform, summary.platform_id);
     const conversationOutcome = extractRaw(conversationResult);
     if (conversationOutcome.status === "rate_limited") {
@@ -286,6 +288,21 @@ export async function collectFromTab(
   // the orchestrator can rely on them before the connector wiring lands; no
   // behavior change is implied by their presence today.
   return { status: "ok", request, complete: true, failures };
+}
+
+// The orchestrator commits the newest watermark it uploaded, so a run cut short
+// by a 429 must have collected an oldest prefix: otherwise the cursor jumps past
+// the older conversations that were never fetched and they are never re-listed.
+// A missing or unparseable updated_at sorts first, so it can never be the one
+// left behind; ties keep list order (Array.prototype.sort is stable).
+function detailOrder(summaries: readonly ConversationSummary[]): ConversationSummary[] {
+  return [...summaries].sort((a, b) => listedAtMs(a) - listedAtMs(b));
+}
+
+function listedAtMs(summary: ConversationSummary): number {
+  if (summary.updated_at === null) return Number.NEGATIVE_INFINITY;
+  const ms = Date.parse(summary.updated_at);
+  return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
 }
 
 // Retry-After is optional on the wire (undefined when the header was absent);
