@@ -146,7 +146,7 @@ describe("request deadline at each caller", () => {
     await vi.advanceTimersByTimeAsync(DEFAULT_FETCH_TIMEOUT_MS);
 
     // Assert
-    expect(outcome.state()).toBe("resolved");
+    expect(outcome.value()).toEqual({ ok: true });
     expect(await getAuthBlob()).toBeUndefined();
   });
 });

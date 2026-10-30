@@ -17,6 +17,7 @@ export type { PkcePair } from "./pkce";
 
 export { getAccessToken, forceRefresh, tokenProvider } from "./provider";
 export { unpair } from "./revoke";
+export type { UnpairResult } from "./revoke";
 export { runStartupRecovery } from "./startup";
 export { ReconnectRequiredError } from "./errors";
 

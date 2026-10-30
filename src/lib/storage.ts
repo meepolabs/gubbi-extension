@@ -16,6 +16,9 @@ import { PlatformSchema, type Platform } from "./schema/ingest";
 
 const KEY_PREFIX = "gubbi:";
 
+// Every key this extension writes starts with this prefix.
+export const STORAGE_KEY_PREFIX = KEY_PREFIX;
+
 const Keys = {
   cursor: (platform: Platform): string => `${KEY_PREFIX}cursor:${platform}`,
   lease: `${KEY_PREFIX}lease`,
@@ -45,6 +48,10 @@ export const AUTH_LOCK_KEY = Keys.authLock;
 // passes this key to guard the whole run. Exported so the lock guard and this
 // module agree on the namespace without duplicating the literal.
 export const SYNC_LEASE_KEY = Keys.lease;
+
+export const SCHEMA_VERSION_KEY = Keys.schemaVersion;
+
+export const platformEnabledKey = Keys.enabled;
 
 // Cap on the content-free event ring buffer. Oldest entries are evicted at
 // write time once the buffer would exceed this length.

@@ -12,6 +12,16 @@ import { vi } from "vitest";
 //                                  paths that use waitForLockReleased (locks) or
 //                                  otherwise react to change events.
 
+// get(null) returns every stored item, as chrome.storage.local does.
+function readKeys(store: Record<string, unknown>, key: string | null): Record<string, unknown> {
+  if (key === null) return { ...store };
+  return key in store ? { [key]: store[key] } : {};
+}
+
+function asKeyList(keys: string | string[]): string[] {
+  return Array.isArray(keys) ? keys : [keys];
+}
+
 export interface StorageStub {
   readonly store: Record<string, unknown>;
   readonly writeLog: string[];
@@ -26,16 +36,18 @@ export function stubChromeStorage(): StorageStub {
   const chromeMock = {
     storage: {
       local: {
-        get: vi.fn(async (key: string) => (key in store ? { [key]: store[key] } : {})),
+        get: vi.fn(async (key: string | null) => readKeys(store, key)),
         set: vi.fn(async (items: Record<string, unknown>) => {
           for (const [key, value] of Object.entries(items)) {
             store[key] = value;
             writeLog.push(`set:${key}`);
           }
         }),
-        remove: vi.fn(async (key: string) => {
-          delete store[key];
-          writeLog.push(`remove:${key}`);
+        remove: vi.fn(async (keys: string | string[]) => {
+          for (const key of asKeyList(keys)) {
+            delete store[key];
+            writeLog.push(`remove:${key}`);
+          }
         }),
       },
       onChanged: { addListener: vi.fn(), removeListener: vi.fn() },
@@ -66,7 +78,7 @@ export function stubChromeStorageWithEvents(): EventfulStorageStub {
   const chromeMock = {
     storage: {
       local: {
-        get: vi.fn(async (key: string) => (key in store ? { [key]: store[key] } : {})),
+        get: vi.fn(async (key: string | null) => readKeys(store, key)),
         set: vi.fn(async (items: Record<string, unknown>) => {
           for (const [key, value] of Object.entries(items)) {
             const oldValue = store[key];
@@ -74,10 +86,12 @@ export function stubChromeStorageWithEvents(): EventfulStorageStub {
             dispatch(key, oldValue, value);
           }
         }),
-        remove: vi.fn(async (key: string) => {
-          const oldValue = store[key];
-          delete store[key];
-          dispatch(key, oldValue, undefined);
+        remove: vi.fn(async (keys: string | string[]) => {
+          for (const key of asKeyList(keys)) {
+            const oldValue = store[key];
+            delete store[key];
+            dispatch(key, oldValue, undefined);
+          }
         }),
       },
       onChanged: {
