@@ -59,10 +59,10 @@ export default tseslint.config(
     // world over the page and MUST stay free of third-party runtime code. They
     // may import only chrome.* globals (ambient), the wxt define utilities, and
     // local modules under src/lib/** via relative paths. Banning every other
-    // bare (non-relative) value specifier keeps packages such as @sentry/* and
-    // zod out of the content-script bundle. Type-only imports (importKind
-    // 'type') are erased at build and carry zero runtime weight, so they are
-    // exempt -- this is what lets a content script reference schema-shaped types
+    // bare (non-relative) value specifier keeps packages such as zod out of
+    // the content-script bundle. Type-only imports (importKind 'type') are
+    // erased at build and carry zero runtime weight, so they are exempt --
+    // this is what lets a content script reference schema-shaped types
     // without pulling the zod runtime. Value imports, dynamic import(), and
     // re-exports from bare specifiers stay banned because each can emit runtime
     // code. The in-build content-isolation gate is the second line of defense.

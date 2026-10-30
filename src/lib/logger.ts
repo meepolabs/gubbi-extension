@@ -1,11 +1,9 @@
 // Lightweight structured logger over console.
 //
 // This is the single sanctioned console sink in the codebase (the no-console
-// ESLint rule is disabled only for this file). Background and popup/options
-// entrypoints additionally initialize Sentry in a later phase; that Sentry
-// init MUST NOT be imported by content scripts -- the eslint.config.js rule on
-// src/content/** enforces that the content bundle stays free of third-party
-// code.
+// ESLint rule is disabled only for this file). It has no third-party
+// dependencies so content scripts can import it; the eslint.config.js rule on
+// entrypoints/*.content/** keeps the content bundle free of third-party code.
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 type LogContext = Record<string, unknown>;
