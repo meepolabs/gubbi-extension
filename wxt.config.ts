@@ -2,22 +2,17 @@ import { defineConfig } from "wxt";
 
 import { CHROME_KEY, GECKO_ID } from "./scripts/browser-identity.mjs";
 import { contentIsolationPlugin } from "./scripts/content-isolation";
+import { hostPermissions } from "./scripts/host-permissions.mjs";
 
 // WXT config. Targets Chrome and Firefox as MV3 (Firefox MV3 is forced via the
 // `manifestVersion: 3` default below plus `--mv3` on the firefox CLI invocations
 // in package.json). The previous CRXJS scaffold (manifest.config.ts +
 // vite.config.ts + a standalone isolation script) has been removed.
 
-// The browser identities are committed constants, not env reads: WXT loads
-// .env* files only after this module is evaluated, so an env read here silently
-// ignores .env.local, and a permanent identity must not be overridable.
-
-const COMMON_HOST_PERMISSIONS = [
-  "https://chatgpt.com/*",
-  "https://claude.ai/*",
-  "https://api.gubbi.ai/*",
-  "https://auth.gubbi.ai/*",
-];
+// WXT loads .env* files only after this module is evaluated, so an env read at
+// module level silently ignores .env.local; env reads belong inside the
+// `manifest` function. The browser identities are committed constants, not env
+// reads at all: a permanent identity must not be overridable.
 
 export default defineConfig({
   // Disable ALL auto-imports: every dependency must be imported explicitly,
@@ -41,7 +36,9 @@ export default defineConfig({
       // manifest content_scripts), so `scripting` is not needed. `identity` is
       // for the OAuth pairing flow (launchWebAuthFlow).
       permissions: ["storage", "alarms", "identity"],
-      host_permissions: COMMON_HOST_PERMISSIONS,
+      // Exactly the content hosts plus the API and auth hosts the egress
+      // allowlist allows; an invalid VITE_* value throws and fails the build.
+      host_permissions: hostPermissions(process.env),
       content_security_policy: {
         extension_pages: "script-src 'self'; object-src 'self'; base-uri 'self'",
       },

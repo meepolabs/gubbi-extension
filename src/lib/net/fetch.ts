@@ -30,8 +30,8 @@ function configuredHost(
 
 // Closed egress allowlist, frozen at build time. An env var set to an invalid
 // value contributes no host, so requests to it are blocked rather than sent to
-// the prod default. The verify gate asserts this set is a subset of the
-// manifest host_permissions.
+// the prod default. The verify gate asserts the manifest host_permissions are
+// exactly these hosts plus the content-script hosts.
 export const ALLOWED_HOSTS: ReadonlySet<string> = new Set(
   [
     configuredHost("VITE_API_BASE_URL", import.meta.env.VITE_API_BASE_URL, DEFAULT_API_HOST),

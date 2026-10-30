@@ -21,7 +21,7 @@
     "test": "vitest run",
     "postinstall": "wxt prepare",
     "check-required-needs": "node --test scripts/verify-required-needs.test.mjs && node scripts/verify-required-needs.mjs",
-    "test:scripts": "node --test scripts/extension-id.test.mjs",
+    "test:scripts": "node --test scripts/extension-id.test.mjs scripts/host-permissions.test.mjs scripts/verify-manifest.test.mjs",
     "verify": "pnpm format:check && pnpm check-required-needs && pnpm test:scripts && pnpm check && pnpm lint && pnpm test && pnpm build && node scripts/verify-manifest.mjs"
   },
   "dependencies": {

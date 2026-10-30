@@ -102,8 +102,9 @@ pnpm verify         # check + lint + test + both builds + manifest assertions
 
 The content-isolation gate runs inside `pnpm build` (and therefore `pnpm
 verify`) for both browser outputs; `pnpm verify` additionally asserts both
-manifests are MV3 with the expected background shape, permissions, host
-permissions, and that the fetch allowlist is a subset of the host permissions.
+manifests are MV3 with the expected background shape and permissions, and that
+each manifest's host permissions are exactly the set its build env yields
+(see Build-time configuration).
 
 Do not background the dev server; run `pnpm dev` in your own terminal.
 
@@ -124,10 +125,40 @@ secrets belong in any committed file.
 - `VITE_API_BASE_URL` -- gubbi API base URL (default `https://api.gubbi.ai`).
 - `VITE_AUTH_HOST` -- auth issuer host (default `auth.gubbi.ai`).
 
-Both accept an https origin or a bare host, with no port, credentials, path,
-query, fragment or wildcard (parsed by `src/lib/net/endpoint-host.mjs`). The
-default applies only when a variable is unset; an invalid or empty value
-contributes no allowed host, so requests to that endpoint are blocked.
+Both accept an https origin or a bare DNS host in canonical form (lowercase,
+punycode), with no port, credentials, path, query, fragment, wildcard,
+trailing dot or IP literal (parsed by `src/lib/net/endpoint-host.mjs`). The
+default applies only when a variable is unset. An invalid or empty value fails
+`pnpm build`; it never falls back to the default.
+
+The manifest `host_permissions` follow the same variables: exactly
+`https://chatgpt.com/*`, `https://claude.ai/*` and `https://<host>/*` for the
+API and auth hosts, with no wildcard, so the browser grants host access to
+precisely the hosts the egress allowlist allows. `scripts/verify-manifest.mjs`
+re-derives that set per browser from the env files WXT loads for a production
+build (`.env`, `.env.local`, `.env.production[.local]`,
+`.env.<browser>[.local]`, `.env.production.<browser>[.local]`, later files
+winning, a non-empty shell value winning over all of them) and fails unless
+each manifest carries exactly that set. `${VAR}` references in env files are
+not expanded by the verifier and fail it; write endpoint values literally.
+
+**Non-production artifact.** To build for another deployment, put its hosts in
+the gitignored `.env.local` (shell variables work too), then run:
+
+```sh
+# .env.local
+VITE_API_BASE_URL=https://api.<your-deployment>.example.test
+VITE_AUTH_HOST=auth.<your-deployment>.example.test
+```
+
+```sh
+pnpm verify && pnpm zip
+```
+
+`pnpm verify` builds with those values and checks both manifests against
+them; `pnpm zip` packages the same configuration. Remove `.env.local` before
+building a production artifact: the verifier would otherwise accept the
+non-production hosts it was given.
 
 The browser identities are committed constants in
 `scripts/browser-identity.mjs`, not environment variables: the Chrome `key`
@@ -183,7 +214,8 @@ For module-level navigation (what each area does, what it imports) see
 wxt.config.ts             WXT config: manifest fn, imports:false, isolation hook
 scripts/
   content-isolation.ts    in-build Rollup gate: no node_modules in content bundles
-  verify-manifest.mjs      post-build manifest + egress-allowlist assertions
+  host-permissions.mjs     manifest host_permissions from the endpoint env vars
+  verify-manifest.mjs      post-build manifest + env-derived host_permissions assertions
   verify-required-needs.mjs  CI gate: `required` needs every other job (copy of gubbi-web's)
 content-isolation/        committed per-browser wxt-internal allowlist snapshots
 entrypoints/
