@@ -74,6 +74,53 @@ async function fetchAccessToken(): Promise<RawFetchOutcome<string>> {
   return { status: "ok", data: token };
 }
 
+// Walks one listing (offset paging, newest first) until a short or empty page,
+// the since watermark, or the page ceiling.
+async function listPass(
+  headers: Record<string, string>,
+  extraQuery: string,
+  since: string | undefined,
+): Promise<RawFetchOutcome<ConversationSummary[]>> {
+  const collected: ConversationSummary[] = [];
+  for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
+    const offset = page * LIST_PAGE_SIZE;
+    const url = `${CONVERSATIONS_URL}?offset=${offset}&limit=${LIST_PAGE_SIZE}&order=updated${extraQuery}`;
+    const pageOutcome = await fetchJson<RawListPage>(url, headers);
+    if (pageOutcome.status !== "ok") return pageOutcome;
+
+    // A 200 with a null/non-object body, or a missing/non-array `items`, must
+    // not crash; treat it as an empty page (which ends the walk below).
+    const items =
+      pageOutcome.data != null &&
+      typeof pageOutcome.data === "object" &&
+      Array.isArray((pageOutcome.data as { items?: unknown }).items)
+        ? (pageOutcome.data as { items: RawListItem[] }).items
+        : [];
+    if (items.length === 0) break;
+
+    let reachedWatermark = false;
+    for (const item of items) {
+      const summary = toSummary(item);
+      if (since !== undefined && isAtOrBeforeWatermark(summary.updated_at, since)) {
+        reachedWatermark = true;
+        break;
+      }
+      collected.push(summary);
+    }
+    if (reachedWatermark || items.length < LIST_PAGE_SIZE) break;
+  }
+  return { status: "ok", data: collected };
+}
+
+// An empty id carries no identity, so it is never treated as a duplicate.
+function mergeById(
+  first: readonly ConversationSummary[],
+  second: readonly ConversationSummary[],
+): ConversationSummary[] {
+  const seen = new Set(first.map((s) => s.platform_id));
+  return [...first, ...second.filter((s) => s.platform_id === "" || !seen.has(s.platform_id))];
+}
+
 export class ChatGptFetcher implements RawConversationFetcher {
   readonly platform = "chatgpt" as const;
 
@@ -87,35 +134,13 @@ export class ChatGptFetcher implements RawConversationFetcher {
     if (tokenOutcome.status !== "ok") return tokenOutcome;
     const headers = bearerHeaders(tokenOutcome.data);
 
-    const collected: ConversationSummary[] = [];
-    for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
-      const offset = page * LIST_PAGE_SIZE;
-      const url = `${CONVERSATIONS_URL}?offset=${offset}&limit=${LIST_PAGE_SIZE}&order=updated`;
-      const pageOutcome = await fetchJson<RawListPage>(url, headers);
-      if (pageOutcome.status !== "ok") return pageOutcome;
-
-      // A 200 with a null/non-object body, or a missing/non-array `items`, must
-      // not crash; treat it as an empty page (which ends the walk below).
-      const items =
-        pageOutcome.data != null &&
-        typeof pageOutcome.data === "object" &&
-        Array.isArray((pageOutcome.data as { items?: unknown }).items)
-          ? (pageOutcome.data as { items: RawListItem[] }).items
-          : [];
-      if (items.length === 0) break;
-
-      let reachedWatermark = false;
-      for (const item of items) {
-        const summary = toSummary(item);
-        if (since !== undefined && isAtOrBeforeWatermark(summary.updated_at, since)) {
-          reachedWatermark = true;
-          break;
-        }
-        collected.push(summary);
-      }
-      if (reachedWatermark || items.length < LIST_PAGE_SIZE) break;
-    }
-    return { status: "ok", data: collected };
+    const live = await listPass(headers, "", since);
+    if (live.status !== "ok") return live;
+    // The default listing may omit archived chats; whether is_archived=true
+    // returns them is checked on a real account.
+    const archived = await listPass(headers, "&is_archived=true", since);
+    if (archived.status !== "ok") return archived;
+    return { status: "ok", data: mergeById(live.data, archived.data) };
   }
 
   async fetchConversationRaw(id: string): Promise<RawFetchOutcome<unknown>> {

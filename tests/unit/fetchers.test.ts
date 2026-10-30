@@ -156,6 +156,186 @@ describe("ChatGptFetcher", () => {
   });
 });
 
+describe("ChatGptFetcher archived listing", () => {
+  it("issues an archived pass and returns its ids after the first pass", async () => {
+    // Arrange
+    const urls = stubChatGptList((archived) =>
+      jsonResponse({ items: [archived ? chatItem("arch-1") : chatItem("live-1")] }),
+    );
+
+    // Act
+    const outcome = await new ChatGptFetcher().listConversationsRaw();
+
+    // Assert
+    expect(outcome.status).toBe("ok");
+    if (outcome.status === "ok") {
+      expect(outcome.data.map((s) => s.platform_id)).toEqual(["live-1", "arch-1"]);
+    }
+    const lists = chatListUrls(urls);
+    expect(lists.map(isArchivedUrl)).toEqual([false, true]);
+    expect(new URL(lists[0]!).searchParams.has("is_archived")).toBe(false);
+  });
+
+  it("keeps an id listed by both passes once", async () => {
+    // Arrange
+    stubChatGptList((archived) =>
+      jsonResponse({
+        items: archived ? [chatItem("both-1"), chatItem("arch-1")] : [chatItem("both-1")],
+      }),
+    );
+
+    // Act
+    const outcome = await new ChatGptFetcher().listConversationsRaw();
+
+    // Assert
+    expect(outcome.status).toBe("ok");
+    if (outcome.status === "ok") {
+      expect(outcome.data.map((s) => s.platform_id)).toEqual(["both-1", "arch-1"]);
+    }
+  });
+
+  it("never collapses summaries that carry no id", async () => {
+    // Arrange
+    stubChatGptList(() => jsonResponse({ items: [{ title: "untitled" }] }));
+
+    // Act
+    const outcome = await new ChatGptFetcher().listConversationsRaw();
+
+    // Assert
+    expect(outcome.status).toBe("ok");
+    if (outcome.status === "ok") {
+      expect(outcome.data.map((s) => s.platform_id)).toEqual(["", ""]);
+    }
+  });
+
+  it("applies the since watermark to the archived pass", async () => {
+    // Arrange
+    stubChatGptList((archived) =>
+      jsonResponse({
+        items: archived
+          ? [
+              chatItem("arch-new", "2026-06-05T12:00:00Z"),
+              chatItem("arch-old", "2026-06-01T12:00:00Z"),
+            ]
+          : [],
+      }),
+    );
+
+    // Act
+    const outcome = await new ChatGptFetcher().listConversationsRaw("2026-06-03T00:00:00Z");
+
+    // Assert
+    expect(outcome.status).toBe("ok");
+    if (outcome.status === "ok") {
+      expect(outcome.data.map((s) => s.platform_id)).toEqual(["arch-new"]);
+    }
+  });
+
+  it("stops each pass at the page ceiling", async () => {
+    // Arrange
+    const fullPage = Array.from({ length: CHATGPT_PAGE_SIZE }, (_, i) => chatItem(`c-${i}`));
+    const urls = stubChatGptList(() => jsonResponse({ items: fullPage }));
+
+    // Act
+    const outcome = await new ChatGptFetcher().listConversationsRaw();
+
+    // Assert
+    expect(outcome.status).toBe("ok");
+    const lists = chatListUrls(urls);
+    expect(lists.filter((u) => !isArchivedUrl(u))).toHaveLength(EXPECTED_MAX_LIST_PAGES);
+    expect(lists.filter(isArchivedUrl)).toHaveLength(EXPECTED_MAX_LIST_PAGES);
+  });
+
+  it("surfaces a 429 from the archived pass as rate_limited", async () => {
+    // Arrange
+    stubChatGptList((archived) =>
+      archived
+        ? new Response(null, { status: 429, headers: { "retry-after": "9" } })
+        : jsonResponse({ items: [chatItem("live-1")] }),
+    );
+
+    // Act
+    const outcome = await new ChatGptFetcher().listConversationsRaw();
+
+    // Assert
+    expect(outcome).toEqual({ status: "rate_limited", retryAfterSeconds: 9 });
+    expect(toListOutcome(outcome)).toEqual({
+      ok: false,
+      reason: "rate_limited",
+      retryAfterSeconds: 9,
+    });
+  });
+
+  it.each([
+    ["a 500", () => new Response(null, { status: 500 }), "transient_http"],
+    ["a 401", () => new Response(null, { status: 401 }), "session_lost"],
+    ["a non-JSON body", () => new Response("<html>", { status: 200 }), "malformed_response"],
+  ] as const)(
+    "maps %s from the archived pass like the first pass",
+    async (_label, failing, reason) => {
+      // Arrange
+      stubChatGptList(() => failing());
+      const firstPassOutcome = toListOutcome(await new ChatGptFetcher().listConversationsRaw());
+      vi.restoreAllMocks();
+      stubChatGptList((archived) =>
+        archived ? failing() : jsonResponse({ items: [chatItem("live-1")] }),
+      );
+
+      // Act
+      const outcome = toListOutcome(await new ChatGptFetcher().listConversationsRaw());
+
+      // Assert
+      expect(firstPassOutcome).toEqual({ ok: false, reason });
+      expect(outcome).toEqual(firstPassOutcome);
+    },
+  );
+
+  it("does not issue the archived pass when the first pass fails", async () => {
+    // Arrange
+    const urls = stubChatGptList((archived) =>
+      archived
+        ? jsonResponse({ items: [chatItem("arch-1")] })
+        : new Response(null, { status: 429, headers: { "retry-after": "3" } }),
+    );
+
+    // Act
+    const outcome = await new ChatGptFetcher().listConversationsRaw();
+
+    // Assert
+    expect(outcome).toEqual({ status: "rate_limited", retryAfterSeconds: 3 });
+    expect(chatListUrls(urls).filter(isArchivedUrl)).toHaveLength(0);
+  });
+});
+
+const CHATGPT_PAGE_SIZE = 100;
+
+function chatItem(id: string, updateTime = "2026-06-05T12:00:00Z"): Record<string, string> {
+  return { id, title: id, update_time: updateTime };
+}
+
+function isArchivedUrl(url: string): boolean {
+  return new URL(url).searchParams.get("is_archived") === "true";
+}
+
+function chatListUrls(urls: string[]): string[] {
+  return urls.filter((url) => new URL(url).pathname === "/backend-api/conversations");
+}
+
+// Serves a valid session and routes each list request by its is_archived query
+// parameter; returns the requested URLs in order.
+function stubChatGptList(listResponse: (archived: boolean) => Response): string[] {
+  const urls: string[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    urls.push(url);
+    if (url.includes("/api/auth/session")) {
+      return Promise.resolve(jsonResponse({ accessToken: "tok" }));
+    }
+    return Promise.resolve(listResponse(isArchivedUrl(url)));
+  });
+  return urls;
+}
+
 describe("ClaudeFetcher", () => {
   it("reports an inactive session when there are no organizations", async () => {
     // Arrange
