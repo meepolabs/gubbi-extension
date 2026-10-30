@@ -29,6 +29,7 @@ import type { IngestConversationRequest, ConversationPayload } from "../schema/i
 import { MAX_CONVERSATIONS_PER_REQUEST } from "../schema/ingest";
 import type { SyncStatusState } from "../messages";
 import type { TokenProvider } from "../token-provider";
+import { timestampMs } from "./timestamps";
 
 // Background sync orchestrator. Wakes on the 30-min alarm or a
 // manual SYNC_START and, for each enabled platform, drives:
@@ -230,14 +231,9 @@ function watermarkOf(conversation: ConversationPayload): string {
   return conversation.updated_at ?? conversation.created_at;
 }
 
-const HAS_ZONE_DESIGNATOR = /(?:[zZ]|[+-]\d{2}:\d{2})$/;
-
 // Watermarks may carry differing UTC offsets, so text order is not time order.
-// A timestamp with no zone designator is UTC (as the backend reads it), whereas
-// Date.parse would read it as local time.
 function watermarkMs(conversation: ConversationPayload): number {
-  const wm = watermarkOf(conversation);
-  return Date.parse(HAS_ZONE_DESIGNATOR.test(wm) ? wm : `${wm}Z`);
+  return timestampMs(watermarkOf(conversation));
 }
 
 const FRACTIONAL_SECONDS = /T\d{2}:\d{2}:\d{2}[.,](\d+)/;

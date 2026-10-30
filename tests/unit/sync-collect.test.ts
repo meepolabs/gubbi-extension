@@ -416,10 +416,16 @@ describe("collectFromTab detail order", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
-  it.each<{ name: string; listed: Array<[string, string | null]>; expected: string[] }>([
+  it.each<{
+    name: string;
+    listed: Array<[string, string | null]>;
+    expected: string[];
+    timeZone?: string;
+  }>([
     {
       name: "newest-first listing",
       listed: [
@@ -445,6 +451,16 @@ describe("collectFromTab detail order", () => {
         ["early", "2026-02-01T01:00:00.000+01:00"],
       ],
       expected: ["early", "late"],
+    },
+    {
+      // Read as Tokyo local time, "zoneless" would be 2026-01-31T20:00Z and sort first.
+      name: "zone-less timestamp is UTC, not local time",
+      timeZone: "Asia/Tokyo",
+      listed: [
+        ["zoneless", "2026-02-01T05:00:00"],
+        ["offset", "2026-02-01T01:00:00.000+01:00"],
+      ],
+      expected: ["offset", "zoneless"],
     },
     {
       name: "null updated_at first",
@@ -474,8 +490,9 @@ describe("collectFromTab detail order", () => {
       ],
       expected: ["undated-b", "undated-a", "tie-b", "tie-a", "c3"],
     },
-  ])("requests detail oldest first: $name", async ({ listed, expected }) => {
+  ])("requests detail oldest first: $name", async ({ listed, expected, timeZone }) => {
     // Arrange
+    if (timeZone !== undefined) vi.stubEnv("TZ", timeZone);
     const spy = stubTab({
       list: datedList(listed),
       conversationById: failingConversations(listed.map(([id]) => id)),

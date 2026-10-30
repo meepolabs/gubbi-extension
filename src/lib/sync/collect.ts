@@ -14,6 +14,7 @@ import type {
   FailureReason,
 } from "../messages";
 import type { ConversationSummary } from "../connectors/base";
+import { timestampMs } from "./timestamps";
 
 // Background-side collect seam: drives one platform tab end to end (list ->
 // fetch -> normalize) and returns a structured CollectOutcome. The orchestrator
@@ -301,7 +302,7 @@ function detailOrder(summaries: readonly ConversationSummary[]): ConversationSum
 
 function listedAtMs(summary: ConversationSummary): number {
   if (summary.updated_at === null) return Number.NEGATIVE_INFINITY;
-  const ms = Date.parse(summary.updated_at);
+  const ms = timestampMs(summary.updated_at);
   return Number.isNaN(ms) ? Number.NEGATIVE_INFINITY : ms;
 }
 
