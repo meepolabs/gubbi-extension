@@ -91,14 +91,29 @@ function isRawNode(value: unknown): value is RawNode {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// True when the mapping has exactly one node with an explicit `parent: null`
+// and that node carries no message, the root shape of recorded payloads. With
+// a single parent-null node, any walk that terminates ends at it.
+function hasSingleEmptyRoot(mapping: Record<string, unknown>): boolean {
+  let root: RawNode | null = null;
+  for (const node of Object.values(mapping)) {
+    if (!isRawNode(node) || node.parent !== null) continue;
+    if (root !== null) return false;
+    root = node;
+  }
+  return root !== null && (root.message === null || root.message === undefined);
+}
+
 // Walks from current_node up through parents to the root, returning the nodes in
 // chronological (root-first) order. The server appends unseen message ids and
-// never deletes, so a partial path would be permanent: only an explicit
-// `parent: null` ends the walk. A cycle, a node missing from the mapping or not
-// an object, a parent that is absent or not a string, or running past the
-// mapping size returns null instead.
+// never deletes, so a partial path would be permanent: the walk must end at the
+// mapping's root (see hasSingleEmptyRoot). A cycle, a node missing from the
+// mapping or not an object, a parent that is absent or not a string, a second
+// `parent: null` node, a root carrying a message, or running past the mapping
+// size returns null instead.
 function activeLeafPath(conv: RawConversation): PathNode[] | null {
   const mapping: Record<string, unknown> = conv.mapping ?? {};
+  if (!hasSingleEmptyRoot(mapping)) return null;
   const path: PathNode[] = [];
   const seen = new Set<string>();
   const maxHops = Object.keys(mapping).length + 1;

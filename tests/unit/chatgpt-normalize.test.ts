@@ -216,6 +216,35 @@ describe("ChatGptNormalizer", () => {
         mapping["node-user-1"]!.parent = 7;
       },
     },
+    {
+      name: "a mid-path message node with parent null",
+      mutate: (mapping: RawMapping) => {
+        mapping["node-user-1"]!.parent = null;
+      },
+    },
+    {
+      name: "a mid-path message-less node with parent null",
+      mutate: (mapping: RawMapping) => {
+        mapping["node-tool-1"]!.message = null;
+        mapping["node-tool-1"]!.parent = null;
+      },
+    },
+    {
+      name: "a second parent-null node off the active path",
+      mutate: (mapping: RawMapping) => {
+        mapping["node-assistant-1-original"]!.parent = null;
+      },
+    },
+    {
+      name: "a sole parent-null node that carries a message",
+      mutate: (mapping: RawMapping) => {
+        mapping["node-root"]!.message = {
+          author: { role: "user" },
+          create_time: 1717603200,
+          content: { content_type: "text", parts: ["orphaned root turn"] },
+        };
+      },
+    },
   ])("returns null instead of a partial path on $name", ({ mutate }) => {
     // Arrange
     const raw = cloneRaw();
