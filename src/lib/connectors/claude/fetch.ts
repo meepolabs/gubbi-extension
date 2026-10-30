@@ -12,7 +12,10 @@ import { fetchJson } from "../http";
 
 const ORGANIZATIONS_URL = "https://claude.ai/api/organizations";
 
-const LIST_PAGE_SIZE = 100;
+const LIST_PAGE_SIZE = 50;
+// Hard ceiling on pages walked in one list call, so a server that keeps
+// answering has_more: true cannot loop unbounded.
+const MAX_LIST_PAGES = 50;
 
 interface RawOrganization {
   uuid?: string;
@@ -34,8 +37,28 @@ interface RawListItem {
   updated_at?: string | null;
 }
 
+interface RawListPage {
+  data: RawListItem[];
+  has_more: boolean;
+}
+
+function isRawListPage(body: unknown): body is RawListPage {
+  if (typeof body !== "object" || body === null) return false;
+  const page = body as { data?: unknown; has_more?: unknown };
+  return (
+    Array.isArray(page.data) &&
+    page.data.every((item) => typeof item === "object" && item !== null) &&
+    typeof page.has_more === "boolean"
+  );
+}
+
 function conversationsUrl(orgUuid: string): string {
   return `https://claude.ai/api/organizations/${encodeURIComponent(orgUuid)}/chat_conversations`;
+}
+
+function listPageUrl(orgUuid: string, offset: number): string {
+  const base = `https://claude.ai/api/organizations/${encodeURIComponent(orgUuid)}/chat_conversations_v2`;
+  return `${base}?limit=${LIST_PAGE_SIZE}&offset=${offset}&consistency=strong`;
 }
 
 function detailUrl(orgUuid: string, conversationUuid: string): string {
@@ -88,19 +111,30 @@ export class ClaudeFetcher implements RawConversationFetcher {
     const orgOutcome = await fetchPrimaryOrgUuid();
     if (orgOutcome.status !== "ok") return orgOutcome;
 
-    // The list endpoint returns a bounded list (no documented cursor/offset);
-    // v1 requests a single page and filters by the updated_at watermark. If a
-    // future API exposes pagination this is where it is added.
-    const url = `${conversationsUrl(orgOutcome.data)}?limit=${LIST_PAGE_SIZE}`;
-    const pageOutcome = await fetchJson<RawListItem[]>(url);
-    if (pageOutcome.status !== "ok") return pageOutcome;
-
-    const items = Array.isArray(pageOutcome.data) ? pageOutcome.data : [];
     const collected: ConversationSummary[] = [];
-    for (const item of items) {
-      const summary = toSummary(item);
-      if (since !== undefined && isAtOrBeforeWatermark(summary.updated_at, since)) continue;
-      collected.push(summary);
+    let offset = 0;
+    for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
+      const pageOutcome = await fetchJson<unknown>(listPageUrl(orgOutcome.data, offset));
+      if (pageOutcome.status !== "ok") return pageOutcome;
+      const body = pageOutcome.data;
+      if (!isRawListPage(body)) {
+        return { status: "error", error: "unexpected Claude list response shape" };
+      }
+      // An empty page that still claims more would re-request the same offset
+      // forever; treat it as API drift rather than the end of the listing.
+      if (body.data.length === 0 && body.has_more) {
+        return { status: "error", error: "unexpected empty Claude list page with has_more" };
+      }
+
+      for (const item of body.data) {
+        const summary = toSummary(item);
+        if (since !== undefined && isAtOrBeforeWatermark(summary.updated_at, since)) {
+          return { status: "ok", data: collected };
+        }
+        collected.push(summary);
+      }
+      if (!body.has_more) break;
+      offset += body.data.length;
     }
     return { status: "ok", data: collected };
   }

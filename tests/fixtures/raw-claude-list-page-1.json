@@ -1,0 +1,17 @@
+{
+  "data": [
+    {
+      "uuid": "claude-conv-0003",
+      "name": "Sketch a garden layout",
+      "created_at": "2026-06-07T08:00:00.000000Z",
+      "updated_at": "2026-06-07T08:30:00.000000Z"
+    },
+    {
+      "uuid": "claude-conv-0002",
+      "name": "Compare two bike routes",
+      "created_at": "2026-06-06T10:00:00.000000Z",
+      "updated_at": "2026-06-06T10:20:00.000000Z"
+    }
+  ],
+  "has_more": true
+}

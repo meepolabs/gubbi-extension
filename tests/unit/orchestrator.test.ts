@@ -824,7 +824,10 @@ describe("watermarks with sub-millisecond precision", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = typeof input === "string" ? input : input.toString();
       const body = url.includes("/chat_conversations")
-        ? [{ uuid: "laterMicros", name: "", updated_at: "2026-02-02T00:00:00.000999Z" }]
+        ? {
+            data: [{ uuid: "laterMicros", name: "", updated_at: "2026-02-02T00:00:00.000999Z" }],
+            has_more: false,
+          }
         : [{ uuid: "org", capabilities: ["chat"] }];
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
     });

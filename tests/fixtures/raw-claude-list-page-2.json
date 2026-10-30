@@ -1,0 +1,11 @@
+{
+  "data": [
+    {
+      "uuid": "claude-conv-0001",
+      "name": "Plan a reading list",
+      "created_at": "2026-06-05T09:00:00.000000Z",
+      "updated_at": "2026-06-05T09:15:00.000000Z"
+    }
+  ],
+  "has_more": false
+}

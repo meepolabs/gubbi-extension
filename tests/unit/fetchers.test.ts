@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatGptFetcher } from "../../src/lib/connectors/chatgpt/fetch";
 import { ClaudeFetcher } from "../../src/lib/connectors/claude/fetch";
+import { toListOutcome } from "../../src/lib/connectors/outcome";
 
+import rawListPage1 from "../fixtures/raw-claude-list-page-1.json";
+import rawListPage2 from "../fixtures/raw-claude-list-page-2.json";
 import rawOrganizations from "../fixtures/raw-claude-organizations.json";
 
 afterEach(() => {
@@ -181,7 +184,7 @@ describe("ClaudeFetcher", () => {
       if (url.endsWith("/api/organizations")) {
         return Promise.resolve(jsonResponse(rawOrganizations));
       }
-      return Promise.resolve(jsonResponse([]));
+      return Promise.resolve(jsonResponse(EMPTY_FINAL_PAGE));
     });
 
     // Act
@@ -209,7 +212,7 @@ describe("ClaudeFetcher", () => {
           ]),
         );
       }
-      return Promise.resolve(jsonResponse([]));
+      return Promise.resolve(jsonResponse(EMPTY_FINAL_PAGE));
     });
 
     // Act
@@ -222,27 +225,125 @@ describe("ClaudeFetcher", () => {
     expect(String(listCall![0])).not.toContain("org-chat-2");
   });
 
-  it("filters out conversations at or before the since watermark", async () => {
+  it("lists on chat_conversations_v2 with limit 50 and strong consistency", async () => {
     // Arrange
-    routeFetch([
-      ["/api/organizations", () => jsonResponse([{ uuid: "org-chat", capabilities: ["chat"] }])],
-      [
-        "/chat_conversations",
-        () =>
-          jsonResponse([
-            { uuid: "keep", name: "Keep", updated_at: "2026-06-05T12:00:00Z" },
-            { uuid: "drop", name: "Drop", updated_at: "2026-06-01T12:00:00Z" },
-          ]),
-      ],
-    ]);
+    const urls = stubClaudeList(() => jsonResponse(EMPTY_FINAL_PAGE));
 
     // Act
-    const outcome = await new ClaudeFetcher().listConversationsRaw("2026-06-03T00:00:00Z");
+    await new ClaudeFetcher().listConversationsRaw();
+
+    // Assert
+    const listUrls = v2ListUrls(urls);
+    expect(listUrls).toHaveLength(1);
+    const url = new URL(listUrls[0]!);
+    expect(url.pathname).toBe("/api/organizations/org-chat/chat_conversations_v2");
+    expect(url.searchParams.get("limit")).toBe("50");
+    expect(url.searchParams.get("offset")).toBe("0");
+    expect(url.searchParams.get("consistency")).toBe("strong");
+  });
+
+  it("walks every page until has_more is false, advancing offset by the page length", async () => {
+    // Arrange
+    const pages = [rawListPage1, rawListPage2];
+    let served = 0;
+    const urls = stubClaudeList(() => jsonResponse(pages[served++]));
+
+    // Act
+    const outcome = await new ClaudeFetcher().listConversationsRaw();
+
+    // Assert
+    expect(outcome).toEqual({
+      status: "ok",
+      data: [
+        {
+          platform_id: "claude-conv-0003",
+          title: "Sketch a garden layout",
+          updated_at: "2026-06-07T08:30:00.000000Z",
+        },
+        {
+          platform_id: "claude-conv-0002",
+          title: "Compare two bike routes",
+          updated_at: "2026-06-06T10:20:00.000000Z",
+        },
+        {
+          platform_id: "claude-conv-0001",
+          title: "Plan a reading list",
+          updated_at: "2026-06-05T09:15:00.000000Z",
+        },
+      ],
+    });
+    const offsets = v2ListUrls(urls).map((u) => new URL(u).searchParams.get("offset"));
+    expect(offsets).toEqual(["0", String(rawListPage1.data.length)]);
+  });
+
+  it("stops at an item at or before the since watermark without requesting the next page", async () => {
+    // Arrange: page 1 says has_more, but its second item is at/before the watermark.
+    const urls = stubClaudeList(() => jsonResponse(rawListPage1));
+
+    // Act
+    const outcome = await new ClaudeFetcher().listConversationsRaw("2026-06-06T12:00:00Z");
 
     // Assert
     expect(outcome.status).toBe("ok");
     if (outcome.status === "ok") {
-      expect(outcome.data.map((s) => s.platform_id)).toEqual(["keep"]);
+      expect(outcome.data.map((s) => s.platform_id)).toEqual(["claude-conv-0003"]);
     }
+    expect(v2ListUrls(urls)).toHaveLength(1);
+  });
+
+  it.each([
+    ["empty data with has_more true", { data: [], has_more: true }],
+    ["a page missing has_more", { data: rawListPage2.data }],
+    ["a page whose has_more is not a boolean", { data: rawListPage2.data, has_more: "true" }],
+    ["a page whose data is not an array", { data: "nope", has_more: false }],
+    ["a page whose data holds a non-object item", { data: [null], has_more: false }],
+    ["a bare array body (the v1 list shape)", rawListPage2.data],
+    ["a JSON null body", null],
+  ])("maps %s to malformed_response after exactly one list request", async (_label, body) => {
+    // Arrange
+    const urls = stubClaudeList(() => jsonResponse(body));
+
+    // Act
+    const outcome = await new ClaudeFetcher().listConversationsRaw();
+
+    // Assert
+    expect(outcome.status).toBe("error");
+    expect(toListOutcome(outcome)).toEqual({ ok: false, reason: "malformed_response" });
+    expect(v2ListUrls(urls)).toHaveLength(1);
+  });
+
+  it("stops after the page ceiling when the server always answers has_more true", async () => {
+    // Arrange
+    const urls = stubClaudeList(() => jsonResponse({ data: rawListPage2.data, has_more: true }));
+
+    // Act
+    const outcome = await new ClaudeFetcher().listConversationsRaw();
+
+    // Assert
+    expect(outcome.status).toBe("ok");
+    expect(v2ListUrls(urls)).toHaveLength(EXPECTED_MAX_LIST_PAGES);
+    if (outcome.status === "ok") expect(outcome.data).toHaveLength(EXPECTED_MAX_LIST_PAGES);
   });
 });
+
+const EMPTY_FINAL_PAGE = { data: [], has_more: false };
+const EXPECTED_MAX_LIST_PAGES = 50;
+
+// Serves a single chat-capable org and delegates every other request to
+// `listResponse`; returns the requested URLs in order.
+function stubClaudeList(listResponse: () => Response): string[] {
+  const urls: string[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = typeof input === "string" ? input : input.toString();
+    urls.push(url);
+    if (url.endsWith("/api/organizations")) {
+      return Promise.resolve(jsonResponse([{ uuid: "org-chat", capabilities: ["chat"] }]));
+    }
+    return Promise.resolve(listResponse());
+  });
+  return urls;
+}
+
+function v2ListUrls(urls: string[]): string[] {
+  return urls.filter((url) => url.includes("/chat_conversations_v2"));
+}
