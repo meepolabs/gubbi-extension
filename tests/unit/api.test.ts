@@ -146,8 +146,7 @@ describe("uploadConversations", () => {
 
   it("parses an HTTP-date Retry-After on 429", async () => {
     // Arrange
-    // Pin to a whole-second epoch so toUTCString() round-trips without losing
-    // sub-second precision (otherwise the delta floors to 29).
+    // Pin to a whole-second epoch so toUTCString() round-trips exactly.
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const future = new Date(now + 30_000).toUTCString();

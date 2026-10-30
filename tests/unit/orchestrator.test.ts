@@ -454,9 +454,8 @@ describe("rate limiting", () => {
     expect(second.statuses().at(-1)).toBe("paused");
   });
 
-  it("honors a Retry-After of 0 as a real zero wait (not the 30-min default)", async () => {
-    // Arrange: a 429 advising "retry now". The old `... || DEFAULT` swallowed 0
-    // into the 30-min default; it must instead pause until ~now.
+  it("floors an upload Retry-After of 0 at a 60 s pause", async () => {
+    // Arrange: a 429 advising "retry now" must not let the next wake hammer the API.
     const stub = stubChrome();
     const bundle = makeDeps();
     bundle.upload.mockResolvedValue({ status: "rate_limited", retryAfterSeconds: 0 });
@@ -467,10 +466,10 @@ describe("rate limiting", () => {
     // Assert
     const pause = pauseOf(stub.store, "chatgpt");
     expect(pause?.reason).toBe("rate_limited");
-    expect(Date.parse(pause!.pausedUntil)).toBe(NOW_MS);
+    expect(Date.parse(pause!.pausedUntil)).toBe(NOW_MS + 60_000);
   });
 
-  it("collect-side rate_limited with retryAfter=0 also pauses at ~now", async () => {
+  it("floors a source Retry-After of 0 at a 60 s pause", async () => {
     // Arrange
     const stub = stubChrome();
     const bundle = makeDeps();
@@ -486,7 +485,22 @@ describe("rate limiting", () => {
     // Assert
     const pause = pauseOf(stub.store, "chatgpt");
     expect(pause?.reason).toBe("rate_limited");
-    expect(Date.parse(pause!.pausedUntil)).toBe(NOW_MS);
+    expect(Date.parse(pause!.pausedUntil)).toBe(NOW_MS + 60_000);
+  });
+
+  it("pauses for the 30 min default when a 429 carries no Retry-After", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const bundle = makeDeps();
+    bundle.upload.mockResolvedValue({ status: "rate_limited", retryAfterSeconds: null });
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    const pause = pauseOf(stub.store, "chatgpt");
+    expect(pause?.reason).toBe("rate_limited");
+    expect(Date.parse(pause!.pausedUntil)).toBe(NOW_MS + 30 * 60_000);
   });
 });
 

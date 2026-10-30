@@ -57,6 +57,9 @@ const BATCH_SIZE = MAX_CONVERSATIONS_PER_REQUEST;
 // Default backoff when a rate-limit carries no Retry-After hint.
 const DEFAULT_RATE_LIMIT_BACKOFF_MS = 30 * 60 * 1000;
 
+// Shortest pause any rate-limit produces, whatever Retry-After advises.
+const MIN_RATE_LIMIT_BACKOFF_MS = 60 * 1000;
+
 // Backoff while waiting for a logged-in platform tab to appear. Distinct from
 // the rate-limit default (though equal for now) so tuning one never silently
 // moves the other -- a tab wait is not a rate-limit condition.
@@ -378,15 +381,15 @@ function transientBackoffMs(consecutive: number, random: () => number): number {
   return capped + Math.floor(random() * TRANSIENT_JITTER_MS);
 }
 
-// Backoff window for a rate-limit. A server-advised Retry-After of 0 means
-// "retry now" and must be honored as a real zero wait -- only an ABSENT hint
-// (null/undefined) falls back to the default window. Branch on null/undefined
-// explicitly so a legitimate 0 is not swallowed by `|| DEFAULT`.
+// Backoff window for a rate-limit. A server-advised Retry-After is honored but
+// floored, so a "retry now" (0) or a tiny hint still yields a real pause rather
+// than an immediate re-hit of the API that just throttled us. Only an ABSENT hint
+// (null/undefined) falls back to the default window.
 function rateLimitBackoffMs(retryAfterSeconds: number | null | undefined): number {
   if (retryAfterSeconds === null || retryAfterSeconds === undefined) {
     return DEFAULT_RATE_LIMIT_BACKOFF_MS;
   }
-  return retryAfterSeconds * 1000;
+  return Math.max(retryAfterSeconds * 1000, MIN_RATE_LIMIT_BACKOFF_MS);
 }
 
 async function pause(

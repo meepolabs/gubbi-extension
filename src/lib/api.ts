@@ -1,3 +1,4 @@
+import { parseRetryAfter } from "./connectors/http";
 import { DEFAULT_API_HOST, originOf, resolveEndpointHost } from "./net/endpoint-host.mjs";
 import { guardedFetch } from "./net/fetch";
 import {
@@ -24,8 +25,6 @@ import type { TokenProvider } from "./token-provider";
 // returns. The orchestrator owns the refresh-and-retry-once decision.
 
 export const INGEST_PATH = "/v1/ingest/conversations";
-
-const MILLIS_PER_SECOND = 1000;
 
 // Mirrors the backend's per-request body cap; a larger body is rejected with 413.
 export const INGEST_MAX_BODY_BYTES = 26_214_400;
@@ -59,24 +58,6 @@ export type UploadOutcome =
   | { readonly status: "oversize_batch" }
   | { readonly status: "auth_unavailable" };
 
-// Parses a Retry-After header value: either a delta-seconds integer or an
-// HTTP-date. Returns whole seconds from now for a date (clamped at >= 0), or
-// null when the header is absent or unparseable.
-function parseRetryAfter(headerValue: string | null): number | null {
-  if (headerValue === null) return null;
-  const trimmed = headerValue.trim();
-  if (trimmed === "") return null;
-
-  if (/^\d+$/.test(trimmed)) {
-    return Number.parseInt(trimmed, 10);
-  }
-
-  const dateMillis = Date.parse(trimmed);
-  if (Number.isNaN(dateMillis)) return null;
-  const deltaSeconds = Math.round((dateMillis - Date.now()) / MILLIS_PER_SECOND);
-  return deltaSeconds < 0 ? 0 : deltaSeconds;
-}
-
 async function parseOkBody(response: Response): Promise<UploadOutcome> {
   let parsed: unknown;
   try {
@@ -97,7 +78,7 @@ function mapErrorStatus(response: Response): UploadOutcome {
   if (response.status === HTTP_TOO_MANY_REQUESTS) {
     return {
       status: "rate_limited",
-      retryAfterSeconds: parseRetryAfter(response.headers.get("retry-after")),
+      retryAfterSeconds: parseRetryAfter(response) ?? null,
     };
   }
   if (response.status >= HTTP_SERVER_ERROR_FLOOR) {

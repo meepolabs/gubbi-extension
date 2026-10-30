@@ -23,17 +23,36 @@ export function sameOriginGet(url: string, headers?: Record<string, string>): Pr
   });
 }
 
-// Parses a Retry-After header. Per RFC 7231 it is either a number of seconds or
-// an HTTP-date; both are handled. Returns undefined when absent/unparseable.
+const MILLIS_PER_SECOND = 1000;
+
+const DELAY_SECONDS = /^\d+$/;
+const DAY = "(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)";
+const LONG_DAY = "(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)";
+const MONTH = "(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)";
+const TIME = "\\d{2}:\\d{2}:\\d{2}";
+const IMF_FIXDATE = new RegExp(`^${DAY}, \\d{2} ${MONTH} \\d{4} ${TIME} GMT$`);
+const RFC850_DATE = new RegExp(`^${LONG_DAY}, \\d{2}-${MONTH}-\\d{2} ${TIME} GMT$`);
+const ASCTIME_DATE = new RegExp(`^${DAY} ${MONTH} (?: \\d|\\d{2}) ${TIME} \\d{4}$`);
+
+// Parses a Retry-After header (RFC 9110 10.2.3): delay-seconds (1*DIGIT) or an
+// HTTP-date, as whole seconds from now rounded up (a past date is 0). Any other
+// value is treated as absent and yields undefined.
 export function parseRetryAfter(response: Response): number | undefined {
   const header = response.headers.get("retry-after");
-  if (!header) return undefined;
-  const asSeconds = Number(header);
-  if (Number.isFinite(asSeconds) && asSeconds >= 0) return asSeconds;
-  const asDate = Date.parse(header);
-  if (Number.isNaN(asDate)) return undefined;
-  const deltaMs = asDate - Date.now();
-  return deltaMs > 0 ? Math.ceil(deltaMs / 1000) : 0;
+  if (header === null) return undefined;
+  if (DELAY_SECONDS.test(header)) return Number.parseInt(header, 10);
+  const dateMs = httpDateMs(header);
+  if (dateMs === undefined) return undefined;
+  return Math.max(0, Math.ceil((dateMs - Date.now()) / MILLIS_PER_SECOND));
+}
+
+// asctime carries no zone token but is GMT by definition; Date.parse would read
+// it as local time, so the zone is appended before parsing.
+function httpDateMs(value: string): number | undefined {
+  let parsed = Number.NaN;
+  if (IMF_FIXDATE.test(value) || RFC850_DATE.test(value)) parsed = Date.parse(value);
+  else if (ASCTIME_DATE.test(value)) parsed = Date.parse(`${value} GMT`);
+  return Number.isNaN(parsed) ? undefined : parsed;
 }
 
 // Maps a non-OK Response to a RawFetchOutcome failure variant. A 429 becomes

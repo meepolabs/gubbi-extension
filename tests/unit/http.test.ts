@@ -6,21 +6,63 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function retryAfterResponse(header: string | null): Response {
+  return new Response(null, {
+    status: 429,
+    headers: header === null ? {} : { "retry-after": header },
+  });
+}
+
 describe("parseRetryAfter", () => {
-  it("parses a numeric seconds Retry-After header", () => {
+  const NOW_MS = Date.parse("2026-06-06T12:00:00.000Z");
+
+  it.each([
+    { name: "a decimal", header: "1.5" },
+    { name: "an exponent", header: "1e3" },
+    { name: "a negative number", header: "-1" },
+    { name: "trailing garbage", header: "5x" },
+    { name: "an empty value", header: "" },
+    { name: "a non-GMT date", header: "Sat, 06 Jun 2026 12:00:02 PST" },
+    { name: "free text", header: "soon-ish" },
+  ])("treats $name ($header) as absent", ({ header }) => {
     // Arrange
-    const response = new Response(null, { status: 429, headers: { "retry-after": "30" } });
+    vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
 
     // Act / Assert
-    expect(parseRetryAfter(response)).toBe(30);
+    expect(parseRetryAfter(retryAfterResponse(header))).toBeUndefined();
   });
 
   it("returns undefined when the header is absent", () => {
-    // Arrange
-    const response = new Response(null, { status: 429 });
+    // Act / Assert
+    expect(parseRetryAfter(retryAfterResponse(null))).toBeUndefined();
+  });
+
+  it.each([
+    { name: "delay-seconds", header: "120", expected: 120 },
+    { name: "zero delay-seconds", header: "0", expected: 0 },
+  ])("parses $name as whole seconds", ({ header, expected }) => {
+    // Act / Assert
+    expect(parseRetryAfter(retryAfterResponse(header))).toBe(expected);
+  });
+
+  it.each([
+    { name: "IMF-fixdate", header: "Sat, 06 Jun 2026 12:00:02 GMT" },
+    { name: "RFC 850 date", header: "Saturday, 06-Jun-26 12:00:02 GMT" },
+    { name: "asctime date", header: "Sat Jun  6 12:00:02 2026" },
+  ])("rounds an $name 1.2 s ahead up to 2 seconds", ({ header }) => {
+    // Arrange: the date is 2 s past a whole second; now sits 1.2 s before it.
+    vi.spyOn(Date, "now").mockReturnValue(NOW_MS + 800);
 
     // Act / Assert
-    expect(parseRetryAfter(response)).toBeUndefined();
+    expect(parseRetryAfter(retryAfterResponse(header))).toBe(2);
+  });
+
+  it("clamps an HTTP-date in the past to 0", () => {
+    // Arrange
+    vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
+
+    // Act / Assert
+    expect(parseRetryAfter(retryAfterResponse("Sat, 06 Jun 2026 11:59:00 GMT"))).toBe(0);
   });
 });
 
