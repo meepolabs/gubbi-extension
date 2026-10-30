@@ -1,5 +1,6 @@
 import { defineConfig } from "wxt";
 
+import { CHROME_KEY, GECKO_ID } from "./scripts/browser-identity.mjs";
 import { contentIsolationPlugin } from "./scripts/content-isolation";
 
 // WXT config. Targets Chrome and Firefox as MV3 (Firefox MV3 is forced via the
@@ -7,18 +8,9 @@ import { contentIsolationPlugin } from "./scripts/content-isolation";
 // in package.json). The previous CRXJS scaffold (manifest.config.ts +
 // vite.config.ts + a standalone isolation script) has been removed.
 
-// Public, env-injected manifest values. Read from process.env in the config
-// (Node) rather than import.meta.env (bundle-only). All are non-secret.
-//
-// WXT_CHROME_KEY: Chrome's `key` field pins a stable extension ID across
-// unpacked loads. It is PUBLIC but must be the real packaged key; it is never
-// invented or committed here. When unset the field is omitted and Chrome
-// assigns a random dev ID. See .env.example.
-const CHROME_KEY = process.env.WXT_CHROME_KEY;
-
-// Firefox add-on id. Placeholder until the real id is registered on AMO; a
-// gecko id is permanent once published, so this stays a documented placeholder.
-const GECKO_ID = process.env.WXT_GECKO_ID ?? "gubbi-extension@gubbi.ai";
+// The browser identities are committed constants, not env reads: WXT loads
+// .env* files only after this module is evaluated, so an env read here silently
+// ignores .env.local, and a permanent identity must not be overridable.
 
 const COMMON_HOST_PERMISSIONS = [
   "https://chatgpt.com/*",
@@ -78,8 +70,9 @@ export default defineConfig({
       };
     }
 
-    // Chrome (and Chromium family). `key` is only emitted when provided.
-    return CHROME_KEY ? { ...base, key: CHROME_KEY } : base;
+    // Chrome (and Chromium family). `key` pins the extension ID across unpacked
+    // and packed installs.
+    return { ...base, key: CHROME_KEY };
   },
 
   hooks: {

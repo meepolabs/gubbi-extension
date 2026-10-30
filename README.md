@@ -117,17 +117,21 @@ click **Load unpacked**, and select `.output/chrome-mv3`.
 
 ### Build-time configuration
 
-Public, non-secret client config is injected by Vite from `VITE_*` / `WXT_*`
+Public, non-secret client config is injected by Vite from `VITE_*`
 environment variables. Copy `.env.example` to `.env.local` and adjust. No
 secrets belong in any committed file.
 
 - `VITE_API_BASE_URL` -- gubbi API base URL (default `https://api.gubbi.ai`).
 - `VITE_AUTH_HOST` -- auth issuer host (default `auth.gubbi.ai`).
-- `WXT_CHROME_KEY` -- Chrome `key` manifest field (omitted when unset; Chrome
-  assigns a random dev ID). PUBLIC, but must be the real packaged key -- never
-  commit a value.
-- `WXT_GECKO_ID` -- Firefox add-on id (default placeholder
-  `gubbi-extension@gubbi.ai`). A gecko id is permanent once published to AMO.
+
+The browser identities are committed constants in
+`scripts/browser-identity.mjs`, not environment variables: the Chrome `key`
+manifest field (the PUBLIC half of the signing key, which fixes the extension
+ID) and the Firefox gecko id `gubbi-extension@gubbi.ai`. Both are permanent
+once published, because the OAuth redirect URIs are derived from them.
+`scripts/verify-manifest.mjs` re-derives the Chrome ID from the built
+manifest's key and checks both against pinned values. The private signing key
+never enters the repo (`*.pem` is gitignored).
 
 ## Development hygiene
 

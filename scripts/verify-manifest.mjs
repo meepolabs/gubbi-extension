@@ -1,12 +1,16 @@
 // Post-build verification gate. Asserts both browser manifests are MV3 with the
-// expected background shape, permissions, and host permissions, and that the
-// fetch.ts egress allowlist is a subset of the manifest host permissions.
+// expected background shape, permissions, and host permissions, that the
+// fetch.ts egress allowlist is a subset of the manifest host permissions, and
+// that the Chrome key and Firefox gecko id match the pinned browser identities.
 //
 // Run after `wxt build` for both browsers: `node scripts/verify-manifest.mjs`.
 // Exit 0 = all assertions pass; exit 1 = a mismatch (details printed).
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { chromeIdFromKey } from "./extension-id.mjs";
 
 const ROOT = process.cwd();
 
@@ -17,6 +21,13 @@ const EXPECTED_HOST_PERMISSIONS = [
   "https://chatgpt.com/*",
   "https://claude.ai/*",
 ];
+
+// Typed out independently of scripts/browser-identity.mjs so a swapped key or
+// gecko id fails here instead of passing by construction. Both are permanent
+// from the first Chrome Web Store / AMO publish: Hydra registers the redirect
+// URIs derived from them.
+export const EXPECTED_CHROME_ID = "afkainjmkhdpnllolcfljoiojcgojppf";
+export const EXPECTED_GECKO_ID = "gubbi-extension@gubbi.ai";
 
 // Mirrors src/lib/net/fetch.ts hostFrom + defaults; kept in sync deliberately
 // so the gate is an independent re-derivation of the allowed egress hosts.
@@ -67,9 +78,7 @@ function checkFirefoxSpecific(manifest, errors) {
     errors.push("expected browser_specific_settings.gecko (Firefox MV3)");
     return;
   }
-  if (typeof gecko.id !== "string" || gecko.id.length === 0) {
-    errors.push("expected browser_specific_settings.gecko.id");
-  }
+  errors.push(...checkFirefoxIdentity(gecko));
   if (gecko.strict_min_version !== "121.0") {
     errors.push(
       `gecko.strict_min_version is ${JSON.stringify(gecko.strict_min_version)}, expected "121.0"`,
@@ -80,21 +89,47 @@ function checkFirefoxSpecific(manifest, errors) {
   }
 }
 
-// Chrome MV3 must NOT carry any gecko / browser_specific_settings, and the
-// `key` field is present IFF WXT_CHROME_KEY was set at build time. Build and
-// verify run in the same `pnpm verify` shell, so the env is observable here.
+/**
+ * @param {{ id?: unknown }} gecko
+ * @returns {string[]}
+ */
+export function checkFirefoxIdentity(gecko) {
+  if (gecko.id !== EXPECTED_GECKO_ID) {
+    return [
+      `gecko.id is ${JSON.stringify(gecko.id)}, expected ${JSON.stringify(EXPECTED_GECKO_ID)}`,
+    ];
+  }
+  return [];
+}
+
+/**
+ * Chromium rejects a `key` that is not valid base64, so only the canonical
+ * encoding is accepted rather than whatever a lenient decoder would salvage.
+ * @param {{ key?: unknown }} manifest
+ * @returns {string[]}
+ */
+export function checkChromeIdentity(manifest) {
+  const key = manifest.key;
+  if (typeof key !== "string" || key.length === 0) {
+    return ["expected manifest.key (pins the Chrome extension ID)"];
+  }
+  if (Buffer.from(key, "base64").toString("base64") !== key) {
+    return ["manifest.key is not canonical base64"];
+  }
+  const id = chromeIdFromKey(key);
+  if (id !== EXPECTED_CHROME_ID) {
+    return [`manifest.key derives Chrome ID ${id}, expected ${EXPECTED_CHROME_ID}`];
+  }
+  return [];
+}
+
+// Chrome MV3 must NOT carry any gecko / browser_specific_settings, and must
+// carry the key that derives the pinned extension ID.
 function checkChromeSpecific(manifest, errors) {
   if (manifest.browser_specific_settings) {
     errors.push("chrome-mv3 must not carry browser_specific_settings / gecko fields");
   }
-  const expectKey = Boolean(process.env.WXT_CHROME_KEY);
-  const hasKey = typeof manifest.key === "string" && manifest.key.length > 0;
-  if (expectKey && !hasKey) {
-    errors.push("expected manifest.key when WXT_CHROME_KEY is set");
-  }
-  if (!expectKey && hasKey) {
-    errors.push("unexpected manifest.key when WXT_CHROME_KEY is unset");
-  }
+  errors.push(...checkChromeIdentity(manifest));
 }
 
 function checkManifest(browserKey, expectBackground) {
@@ -168,11 +203,11 @@ function main() {
     } else {
       console.log(
         `verify-manifest OK for ${browserKey}: MV3, ${expectBackground} background, ` +
-          `permissions + host_permissions match, egress allowlist is a subset.`,
+          `permissions + host_permissions match, egress allowlist is a subset, identity pinned.`,
       );
     }
   }
   process.exit(failed ? 1 : 0);
 }
 
-main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) main();

@@ -15,6 +15,9 @@ coverage
 !.env.example
 *.local
 
+# Signing keys (only the public key is committed, as a constant)
+*.pem
+
 # OS
 .DS_Store
 Thumbs.db
