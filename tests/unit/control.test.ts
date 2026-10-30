@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { clearAccountState } from "../../src/lib/account-state";
 import type { PairResult, UnpairResult } from "../../src/lib/auth";
 import { handleControlMessage, type ControlDeps } from "../../src/lib/control/handlers";
-import type { StatusSnapshot } from "../../src/lib/messages";
+import type { PairFailureReason, StatusSnapshot } from "../../src/lib/messages";
 import {
+  getLastPairFailure,
   getPlatformEnabled,
   getStatus,
   setAuthBlob,
@@ -43,6 +45,8 @@ const SEEDED_REFRESH_TOKEN = "seeded-refresh-token-c40e22";
 const NOW_MS = Date.parse("2026-10-30T12:00:00.000Z");
 const PERIODIC_AT_MS = NOW_MS + 18 * 60_000;
 const CONTINUATION_AT_MS = NOW_MS + 60_000;
+
+const LAST_PAIR_FAILURE_KEY = "gubbi:lastPairFailure";
 
 function blob(status: AuthBlob["status"] = "ok"): AuthBlob {
   return {
@@ -220,6 +224,8 @@ describe("STATUS_REQUEST", () => {
       ok: true,
       auth: "none",
       nextSyncAt: null,
+      pairing: false,
+      pairFailure: null,
       platforms: [
         {
           platform: "chatgpt",
@@ -323,6 +329,7 @@ describe("STATUS_REQUEST", () => {
   });
 
   it("reports the earliest scheduled sync alarm as nextSyncAt", async () => {
+    await setAuthBlob(blob("ok"));
     alarms["sync"] = { name: "sync", scheduledTime: PERIODIC_AT_MS };
     alarms["sync-continuation"] = { name: "sync-continuation", scheduledTime: CONTINUATION_AT_MS };
 
@@ -330,9 +337,33 @@ describe("STATUS_REQUEST", () => {
   });
 
   it("reports the periodic alarm when no continuation is scheduled", async () => {
+    await setAuthBlob(blob("ok"));
     alarms["sync"] = { name: "sync", scheduledTime: PERIODIC_AT_MS };
 
     expect((await status()).nextSyncAt).toBe(new Date(PERIODIC_AT_MS).toISOString());
+  });
+
+  it("reports the alarm time while a reconnect is required", async () => {
+    await setAuthBlob(blob("reconnect_required"));
+    alarms["sync"] = { name: "sync", scheduledTime: PERIODIC_AT_MS };
+
+    expect((await status()).nextSyncAt).toBe(new Date(PERIODIC_AT_MS).toISOString());
+  });
+
+  it("reports no next sync while unpaired even with alarms scheduled", async () => {
+    alarms["sync"] = { name: "sync", scheduledTime: PERIODIC_AT_MS };
+    alarms["sync-continuation"] = { name: "sync-continuation", scheduledTime: CONTINUATION_AT_MS };
+
+    const snapshot = await status();
+
+    expect(snapshot.auth).toBe("none");
+    expect(snapshot.nextSyncAt).toBeNull();
+  });
+
+  it("reports no pair failure when the stored one is malformed", async () => {
+    storage.store[LAST_PAIR_FAILURE_KEY] = { reason: "lost_in_space", at: "not a time" };
+
+    expect((await status()).pairFailure).toBeNull();
   });
 
   it("degrades nextSyncAt to null when the alarm read fails", async () => {
@@ -391,6 +422,179 @@ describe("PAIR_START", () => {
     expect(await second).toEqual({ ok: true });
     expect(pair).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("pairing progress and failure in STATUS_REQUEST", () => {
+  async function status(): Promise<StatusSnapshot> {
+    const response = await handleControlMessage(
+      { type: "STATUS_REQUEST" },
+      POPUP_SENDER,
+      fakes().deps,
+    );
+    return response as StatusSnapshot;
+  }
+
+  // pair() swaps accounts with the account-state sweep, so the fake does too:
+  // a failure written before the sweep would not survive it.
+  function failingPair(reason: PairFailureReason): () => Promise<PairResult> {
+    return async () => {
+      await clearAccountState();
+      return { ok: false, reason };
+    };
+  }
+
+  function deferredPair(): { pair: () => Promise<PairResult>; finish: (r: PairResult) => void } {
+    let finish: (result: PairResult) => void = () => undefined;
+    return {
+      pair: () => new Promise<PairResult>((resolve) => (finish = resolve)),
+      finish: (result) => finish(result),
+    };
+  }
+
+  it("reports pairing while a PAIR_START is pending and not after it settles", async () => {
+    const deferred = deferredPair();
+    const { deps, pair } = fakes({ pair: deferred.pair });
+
+    const pending = handleControlMessage({ type: "PAIR_START" }, POPUP_SENDER, deps);
+    await vi.waitFor(() => expect(pair).toHaveBeenCalled());
+    const during = await status();
+    deferred.finish({ ok: true });
+    await pending;
+    const after = await status();
+
+    expect(during.pairing).toBe(true);
+    expect(after.pairing).toBe(false);
+  });
+
+  it.each<PairFailureReason>([
+    "state_mismatch",
+    "user_cancelled",
+    "exchange_failed",
+    "network",
+    "superseded",
+    "busy",
+  ])("reports %s as the pair failure after a failed PAIR_START", async (reason) => {
+    const { deps } = fakes({ pair: failingPair(reason) });
+
+    const response = await handleControlMessage({ type: "PAIR_START" }, POPUP_SENDER, deps);
+    const snapshot = await status();
+
+    expect(response).toEqual({ ok: false, reason });
+    expect(snapshot.pairFailure).toBe(reason);
+    expect(snapshot.pairing).toBe(false);
+    expect(await getLastPairFailure()).toEqual({ reason, at: new Date(NOW_MS).toISOString() });
+  });
+
+  it("clears the pair failure after a later successful PAIR_START", async () => {
+    await handleControlMessage(
+      { type: "PAIR_START" },
+      POPUP_SENDER,
+      fakes({ pair: failingPair("network") }).deps,
+    );
+
+    await handleControlMessage({ type: "PAIR_START" }, POPUP_SENDER, fakes().deps);
+
+    expect((await status()).pairFailure).toBeNull();
+  });
+
+  it("reports no pair failure while a new attempt is in flight", async () => {
+    await handleControlMessage(
+      { type: "PAIR_START" },
+      POPUP_SENDER,
+      fakes({ pair: failingPair("user_cancelled") }).deps,
+    );
+    expect((await status()).pairFailure).toBe("user_cancelled");
+    const deferred = deferredPair();
+    const { deps, pair } = fakes({ pair: deferred.pair });
+
+    const pending = handleControlMessage({ type: "PAIR_START" }, POPUP_SENDER, deps);
+    await vi.waitFor(() => expect(pair).toHaveBeenCalled());
+    const during = await status();
+    deferred.finish({ ok: false, reason: "busy" });
+    await pending;
+
+    expect(during.pairFailure).toBeNull();
+    expect((await status()).pairFailure).toBe("busy");
+  });
+
+  it("reports no pair failure while a new attempt's clear has not landed yet", async () => {
+    storage.store[LAST_PAIR_FAILURE_KEY] = {
+      reason: "network",
+      at: new Date(NOW_MS).toISOString(),
+    };
+    const local = chrome.storage.local as unknown as { remove: (keys: unknown) => Promise<void> };
+    const realRemove = local.remove;
+    let releaseClear: () => void = () => undefined;
+    local.remove = (keys: unknown) =>
+      keys === LAST_PAIR_FAILURE_KEY
+        ? new Promise<void>((resolve) => (releaseClear = resolve))
+        : realRemove(keys);
+    const deferred = deferredPair();
+    const { deps } = fakes({ pair: deferred.pair });
+
+    const pending = handleControlMessage({ type: "PAIR_START" }, POPUP_SENDER, deps);
+    const during = await status();
+    releaseClear();
+    await vi.waitFor(() => expect(deps.pair).toHaveBeenCalled());
+    deferred.finish({ ok: true });
+    await pending;
+
+    expect(LAST_PAIR_FAILURE_KEY in storage.store).toBe(true);
+    expect(during.pairing).toBe(true);
+    expect(during.pairFailure).toBeNull();
+  });
+
+  it("drops the pair failure on UNPAIR", async () => {
+    await handleControlMessage(
+      { type: "PAIR_START" },
+      POPUP_SENDER,
+      fakes({ pair: failingPair("exchange_failed") }).deps,
+    );
+    expect((await status()).pairFailure).toBe("exchange_failed");
+    const { deps } = fakes({
+      unpair: async () => {
+        await clearAccountState();
+        return { ok: true };
+      },
+    });
+
+    await handleControlMessage({ type: "UNPAIR" }, POPUP_SENDER, deps);
+
+    expect((await status()).pairFailure).toBeNull();
+    expect(LAST_PAIR_FAILURE_KEY in storage.store).toBe(false);
+  });
+
+  it.each([
+    ["a failure write", "set", { ok: false, reason: "network" }],
+    ["the clear at the start of a failing attempt", "remove", { ok: false, reason: "network" }],
+    ["the clear at the start of a successful attempt", "remove", { ok: true }],
+  ] as const)(
+    "keeps the PAIR_START reply when %s rejects",
+    async (_label, method, result: PairResult) => {
+      const local = chrome.storage.local as unknown as Record<
+        "set" | "remove",
+        (arg: unknown) => Promise<void>
+      >;
+      const real = local[method];
+      local[method] = async (arg: unknown) => {
+        const keys =
+          typeof arg === "string"
+            ? [arg]
+            : Array.isArray(arg)
+              ? (arg as string[])
+              : Object.keys(arg as object);
+        if (keys.includes(LAST_PAIR_FAILURE_KEY)) throw new Error("quota exceeded");
+        return real(arg);
+      };
+      const { deps, pair, startSync } = fakes({ pair: async () => result });
+
+      const response = await handleControlMessage({ type: "PAIR_START" }, POPUP_SENDER, deps);
+
+      expect(pair).toHaveBeenCalledTimes(1);
+      expect(response).toEqual(result);
+      expect(startSync).toHaveBeenCalledTimes(result.ok ? 1 : 0);
+    },
+  );
 });
 
 describe("UNPAIR", () => {

@@ -1,5 +1,6 @@
 import { clearAccountState } from "../account-state";
 import { logger } from "../logger";
+import type { UnpairResult } from "../messages";
 import { guardedFetch } from "../net/fetch";
 import { getAccountGeneration, getAuthBlob, setAccountGeneration } from "../storage";
 import { AUTH_ORIGIN, HYDRA_CLIENT_ID } from "./config";
@@ -15,8 +16,6 @@ import { withAccountLocksOrBusy } from "./transition";
 // Background-only.
 
 const REVOKE_PATH = "/oauth2/revoke";
-
-export type UnpairResult = { readonly ok: true } | { readonly ok: false; readonly reason: "busy" };
 
 // Hydra revokes the whole consent chain on a refresh-token revoke. Any failure
 // is tolerated: the local teardown is what logs the user out, and a stranded

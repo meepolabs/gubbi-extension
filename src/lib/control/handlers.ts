@@ -2,7 +2,13 @@ import type { PairResult, UnpairResult } from "../auth";
 import { logger } from "../logger";
 import type { ControlError, ControlOk, ControlResponse } from "../messages";
 import { PlatformSchema, type Platform } from "../schema/ingest";
-import { getStatus, setPlatformEnabled, setStatus } from "../storage";
+import {
+  clearLastPairFailure,
+  getStatus,
+  setLastPairFailure,
+  setPlatformEnabled,
+  setStatus,
+} from "../storage";
 import { ControlMessageSchema, type ParsedControlMessage } from "./schemas";
 import { isTrustedControlSender } from "./sender";
 import { readStatusSnapshot } from "./status";
@@ -43,13 +49,30 @@ async function resetReconnectStatuses(): Promise<void> {
   }
 }
 
+// The stored failure is popup context only; losing a write must never change
+// the pairing outcome or its reply.
+async function recordPairFailure(write: () => Promise<void>): Promise<void> {
+  try {
+    await write();
+  } catch (error) {
+    logger.warn("pair failure record write failed", {
+      error: error instanceof Error ? error.name : "unknown",
+    });
+  }
+}
+
 async function runPair(deps: ControlDeps): Promise<PairResult> {
+  await recordPairFailure(clearLastPairFailure);
   // Startup recovery must settle first: run after pairing, it would judge the
   // fresh version-1 credentials against a stale refresh marker and demand a
   // reconnect.
   await deps.ensureRecovered();
   const result = await deps.pair();
-  if (!result.ok) return { ok: false, reason: result.reason };
+  if (!result.ok) {
+    const at = new Date(deps.now()).toISOString();
+    await recordPairFailure(() => setLastPairFailure({ reason: result.reason, at }));
+    return { ok: false, reason: result.reason };
+  }
   await resetReconnectStatuses();
   deps.startSync();
   return { ok: true };
@@ -76,7 +99,7 @@ async function dispatch(
       deps.startSync(message.platform);
       return OK;
     case "STATUS_REQUEST":
-      return readStatusSnapshot(deps.syncAlarmNames, deps.now());
+      return readStatusSnapshot(deps.syncAlarmNames, deps.now(), pairInFlight !== undefined);
     case "PAIR_START":
       return handlePair(deps);
     case "UNPAIR":

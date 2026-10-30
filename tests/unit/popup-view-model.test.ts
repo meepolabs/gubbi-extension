@@ -26,6 +26,8 @@ function snapshot(overrides: Partial<StatusSnapshot> = {}): StatusSnapshot {
     auth: "ok",
     platforms: [platform(), platform({ platform: "claude" })],
     nextSyncAt: null,
+    pairing: false,
+    pairFailure: null,
     ...overrides,
   };
 }

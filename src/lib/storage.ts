@@ -1,7 +1,12 @@
 import { z } from "zod";
 
 import { logger } from "./logger";
-import { SYNC_STATUS_STATES, type SyncStatusState } from "./messages";
+import {
+  PAIR_FAILURE_REASONS,
+  SYNC_STATUS_STATES,
+  type PairFailureReason,
+  type SyncStatusState,
+} from "./messages";
 import { PlatformSchema, type Platform } from "./schema/ingest";
 
 // Typed wrapper over chrome.storage.local with namespaced keys. This module is
@@ -31,6 +36,7 @@ const Keys = {
   enabled: (platform: Platform): string => `${KEY_PREFIX}enabled:${platform}`,
   lastRunAt: (platform: Platform): string => `${KEY_PREFIX}lastRunAt:${platform}`,
   syncEvents: `${KEY_PREFIX}syncEvents`,
+  lastPairFailure: `${KEY_PREFIX}lastPairFailure`,
   schemaVersion: `${KEY_PREFIX}schema_version`,
   accountGeneration: `${KEY_PREFIX}accountGeneration`,
   // The auth single-flight lock lives in src/lib/locks.ts; only its storage key
@@ -142,6 +148,14 @@ export const SyncEventSchema = z.object({
 export type SyncEvent = z.infer<typeof SyncEventSchema>;
 
 const SyncEventsSchema = z.array(SyncEventSchema);
+
+// Why the most recent pairing attempt failed, and when. Account state: the
+// account-state sweep removes it like any other key.
+export const LastPairFailureSchema = z.object({
+  reason: z.enum(PAIR_FAILURE_REASONS as readonly [PairFailureReason, ...PairFailureReason[]]),
+  at: z.iso.datetime(),
+});
+export type LastPairFailure = z.infer<typeof LastPairFailureSchema>;
 
 const AccountGenerationSchema = z.number().int().min(0);
 
@@ -274,6 +288,18 @@ export async function appendSyncEvent(entry: SyncEvent): Promise<void> {
   const existing = await getSyncEvents();
   const next = [...existing, entry].slice(-MAX_SYNC_EVENTS);
   await setItem(Keys.syncEvents, next);
+}
+
+export function getLastPairFailure(): Promise<LastPairFailure | undefined> {
+  return getItem(Keys.lastPairFailure, (raw) => LastPairFailureSchema.parse(raw));
+}
+
+export function setLastPairFailure(failure: LastPairFailure): Promise<void> {
+  return setItem(Keys.lastPairFailure, failure);
+}
+
+export function clearLastPairFailure(): Promise<void> {
+  return removeItem(Keys.lastPairFailure);
 }
 
 export async function getAccountGeneration(): Promise<number> {

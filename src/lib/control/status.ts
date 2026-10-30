@@ -1,7 +1,8 @@
-import type { AuthState, PlatformStatus, StatusSnapshot } from "../messages";
+import type { AuthState, PairFailureReason, PlatformStatus, StatusSnapshot } from "../messages";
 import { PlatformSchema, type Platform } from "../schema/ingest";
 import {
   getAuthBlob,
+  getLastPairFailure,
   getPauseState,
   getPlatformEnabled,
   getPlatformLastRunAt,
@@ -9,8 +10,9 @@ import {
 } from "../storage";
 import { logger } from "../logger";
 
-// Builds the STATUS_REQUEST answer from persisted state only, field by field, so
-// nothing beyond the enumerated StatusSnapshot fields can leak into it.
+// Builds the STATUS_REQUEST answer from persisted state plus the caller's inputs,
+// field by field, so nothing beyond the enumerated StatusSnapshot fields can
+// leak into it.
 //
 // Background-only.
 
@@ -61,16 +63,27 @@ async function readNextSyncAt(alarmNames: readonly string[]): Promise<string | n
   }
 }
 
+// A failure stored by an earlier attempt is stale once a new one is running, even
+// before that attempt's clear has landed.
+async function readPairFailure(pairing: boolean): Promise<PairFailureReason | null> {
+  if (pairing) return null;
+  const failure = await getLastPairFailure();
+  return failure?.reason ?? null;
+}
+
 export async function readStatusSnapshot(
   alarmNames: readonly string[],
   nowMs: number,
+  pairing: boolean,
 ): Promise<StatusSnapshot> {
   const platforms = await Promise.all(
     PlatformSchema.options.map((platform) => readPlatformStatus(platform, nowMs)),
   );
-  const [auth, nextSyncAt] = await Promise.all([
+  const [auth, pairFailure] = await Promise.all([
     readAuthState(platforms),
-    readNextSyncAt(alarmNames),
+    readPairFailure(pairing),
   ]);
-  return { ok: true, auth, platforms, nextSyncAt };
+  // The alarms outlive the credentials, but a sync without them skips at once.
+  const nextSyncAt = auth === "none" ? null : await readNextSyncAt(alarmNames);
+  return { ok: true, auth, platforms, nextSyncAt, pairing, pairFailure };
 }

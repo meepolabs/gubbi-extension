@@ -4,8 +4,10 @@ import {
   isControlMessageType,
   isExtensionMessage,
   FAILURE_REASONS,
+  PAIR_FAILURE_REASONS,
   SYNC_STATUS_STATES,
   type FailureReason,
+  type PairFailureReason,
   type SyncStatusState,
 } from "../../src/lib/messages";
 
@@ -123,6 +125,22 @@ describe("SyncStatusState", () => {
   it("exposes exactly the four declared states", () => {
     expect(new Set(SYNC_STATUS_STATES)).toEqual(new Set(states));
     expect(SYNC_STATUS_STATES).toHaveLength(states.length);
+  });
+});
+
+describe("PairFailureReason", () => {
+  const reasons: PairFailureReason[] = [
+    "state_mismatch",
+    "user_cancelled",
+    "exchange_failed",
+    "network",
+    "superseded",
+    "busy",
+  ];
+
+  it("exposes exactly the declared reasons", () => {
+    expect(new Set(PAIR_FAILURE_REASONS)).toEqual(new Set(reasons));
+    expect(PAIR_FAILURE_REASONS).toHaveLength(reasons.length);
   });
 });
 

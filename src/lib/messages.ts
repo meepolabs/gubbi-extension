@@ -1,6 +1,5 @@
 import type { Platform } from "./schema/ingest";
 import type { ConversationSummary } from "./connectors/base";
-import type { PairResult, UnpairResult } from "./auth";
 import type { PauseState } from "./storage";
 
 // Single message envelope for service-worker <-> content-script <-> popup
@@ -205,6 +204,39 @@ export interface ControlOk {
   ok: true;
 }
 
+// Why each failure is distinct: state_mismatch is a security stop (possible
+// CSRF / tampered redirect); user_cancelled is benign (closed the window or
+// denied); exchange_failed is a rejected grant (e.g. expired code); network is
+// any transport-level failure; superseded means a disconnect landed while the
+// auth window was open, so the new credentials were discarded; busy means a
+// sync or refresh held the locks too long to install them. The popup maps these
+// to user-facing copy.
+export type PairFailureReason =
+  | "state_mismatch"
+  | "user_cancelled"
+  | "exchange_failed"
+  | "network"
+  | "superseded"
+  | "busy";
+
+// Runtime mirror of PairFailureReason, kept exhaustive by the Record.
+const PAIR_FAILURE_REASON_PRESENCE: Record<PairFailureReason, true> = {
+  state_mismatch: true,
+  user_cancelled: true,
+  exchange_failed: true,
+  network: true,
+  superseded: true,
+  busy: true,
+};
+
+export const PAIR_FAILURE_REASONS: readonly PairFailureReason[] = Object.keys(
+  PAIR_FAILURE_REASON_PRESENCE,
+) as PairFailureReason[];
+
+export type PairResult = { ok: true } | { ok: false; reason: PairFailureReason };
+
+export type UnpairResult = { readonly ok: true } | { readonly ok: false; readonly reason: "busy" };
+
 //   none               -- never paired, or disconnected
 //   ok                 -- paired and no definitive token rejection seen
 //   reconnect_required -- the token was definitively rejected (stored on the
@@ -225,12 +257,23 @@ export interface PlatformStatus {
 }
 
 // nextSyncAt is the earliest scheduled sync wake (periodic or continuation), or
-// null when none is scheduled or the alarm read failed.
+// null when none is scheduled, the alarm read failed, or auth is "none" (a sync
+// without credentials skips, so an unpaired snapshot promises none).
+//
+// pairing is true while a PAIR_START flow is running in the background. The
+// popup closes when the auth window opens, so a reopened popup learns about the
+// flow (and its outcome) only from here.
+//
+// pairFailure is why the most recent pairing attempt failed; null when it
+// succeeded, none was made since the last disconnect, or a new attempt is
+// running.
 export interface StatusSnapshot {
   ok: true;
   auth: AuthState;
   platforms: PlatformStatus[];
   nextSyncAt: string | null;
+  pairing: boolean;
+  pairFailure: PairFailureReason | null;
 }
 
 export interface ControlResponseMap {

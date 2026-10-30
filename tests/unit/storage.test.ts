@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   appendSyncEvent,
+  clearLastPairFailure,
   getAuthBlob,
+  getLastPairFailure,
   getPauseState,
   getPendingAuthFlow,
   getPlatformEnabled,
@@ -14,6 +16,7 @@ import {
   MAX_SYNC_EVENTS,
   migrate,
   setAuthBlob,
+  setLastPairFailure,
   setPauseState,
   setPlatformEnabled,
   setPlatformLastRunAt,
@@ -344,6 +347,52 @@ describe("platform lastRunAt (validated read)", () => {
 
     // Act
     const result = await getPlatformLastRunAt("chatgpt");
+
+    // Assert
+    expect(result).toBeUndefined();
+  });
+});
+
+describe("last pair failure (validated read)", () => {
+  const failure = { reason: "user_cancelled", at: "2026-06-06T12:00:00.000Z" } as const;
+
+  it("round-trips a failure through set then get, and clear removes it", async () => {
+    // Arrange
+    const store: Record<string, unknown> = {};
+    stubPersistentStorage(store);
+
+    // Act
+    await setLastPairFailure(failure);
+    const written = await getLastPairFailure();
+    await clearLastPairFailure();
+
+    // Assert
+    expect(written).toEqual(failure);
+    expect(await getLastPairFailure()).toBeUndefined();
+  });
+
+  it("returns undefined when nothing is stored", async () => {
+    // Arrange
+    stubChromeStorage({});
+
+    // Act
+    const result = await getLastPairFailure();
+
+    // Assert
+    expect(result).toBeUndefined();
+  });
+
+  it.each([
+    ["an unknown reason", { reason: "lost_in_space", at: failure.at }],
+    ["a timestamp that is not ISO", { reason: "network", at: "yesterday" }],
+    ["a missing timestamp", { reason: "network" }],
+    ["a bare reason string", "network"],
+  ])("returns undefined for %s", async (_label, stored) => {
+    // Arrange
+    stubChromeStorage({ "gubbi:lastPairFailure": stored });
+
+    // Act
+    const result = await getLastPairFailure();
 
     // Assert
     expect(result).toBeUndefined();

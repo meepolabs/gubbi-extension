@@ -1,5 +1,6 @@
 import { clearAccountState } from "../account-state";
 import { logger } from "../logger";
+import type { PairResult } from "../messages";
 import {
   getAccountGeneration,
   setAuthBlob,
@@ -25,26 +26,10 @@ export type { PkcePair } from "./pkce";
 
 export { getAccessToken, forceRefresh, tokenProvider } from "./provider";
 export { unpair } from "./revoke";
-export type { UnpairResult } from "./revoke";
 export { runStartupRecovery } from "./startup";
 export { ReconnectRequiredError } from "./errors";
 
-// Why each failure is distinct: state_mismatch is a security stop (possible
-// CSRF / tampered redirect); user_cancelled is benign (closed the window or
-// denied); exchange_failed is a rejected grant (e.g. expired code); network is
-// any transport-level failure; superseded means a disconnect landed while the
-// auth window was open, so the new credentials were discarded; busy means a
-// sync or refresh held the locks too long to install them. The popup maps these
-// to user-facing copy.
-export type PairFailureReason =
-  | "state_mismatch"
-  | "user_cancelled"
-  | "exchange_failed"
-  | "network"
-  | "superseded"
-  | "busy";
-
-export type PairResult = { ok: true } | { ok: false; reason: PairFailureReason };
+export type { PairFailureReason, PairResult, UnpairResult } from "../messages";
 
 function authBlobFrom(
   accessToken: string,

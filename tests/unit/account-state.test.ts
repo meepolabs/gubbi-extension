@@ -26,6 +26,11 @@ describe("clearAccountState", () => {
     ["last run", "gubbi:lastRunAt:claude", "2026-01-01T00:00:00Z"],
     ["events", "gubbi:syncEvents", [{ at: "2026-01-01T00:00:00Z", kind: "run_start" }]],
     ["auth blob", "gubbi:authBlob", { refreshToken: "rt" }],
+    [
+      "last pair failure",
+      "gubbi:lastPairFailure",
+      { reason: "network", at: "2026-01-01T00:00:00Z" },
+    ],
     ["unknown future key", "gubbi:future-key", true],
   ])("removes the %s", async (_name, key, value) => {
     // Arrange
