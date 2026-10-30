@@ -25,7 +25,6 @@ export interface ExchangeParams {
 }
 
 export async function exchangeCode(params: ExchangeParams): Promise<ExchangeResult> {
-  const url = new URL(TOKEN_PATH, AUTH_ORIGIN).toString();
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code: params.code,
@@ -36,6 +35,7 @@ export async function exchangeCode(params: ExchangeParams): Promise<ExchangeResu
 
   let response: Response;
   try {
+    const url = new URL(TOKEN_PATH, AUTH_ORIGIN).toString();
     response = await guardedFetch(url, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },

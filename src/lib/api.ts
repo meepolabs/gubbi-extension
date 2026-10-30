@@ -1,3 +1,4 @@
+import { DEFAULT_API_HOST, originOf, resolveEndpointHost } from "./net/endpoint-host.mjs";
 import { guardedFetch } from "./net/fetch";
 import {
   HTTP_FORBIDDEN,
@@ -24,8 +25,6 @@ import type { TokenProvider } from "./token-provider";
 
 export const INGEST_PATH = "/v1/ingest/conversations";
 
-const DEFAULT_API_ORIGIN = "https://api.gubbi.ai";
-
 const MILLIS_PER_SECOND = 1000;
 
 // Mirrors the backend's per-request body cap; a larger body is rejected with 413.
@@ -37,17 +36,11 @@ export function serializeRequest(request: IngestConversationRequest): string {
   return JSON.stringify(request);
 }
 
-// Accepts a bare host ("api.gubbi.ai") or a full URL; returns the origin. Mirrors
-// the egress allowlist + auth config so the request lands on the allowed host.
-function apiOrigin(): string {
-  const configured = import.meta.env.VITE_API_BASE_URL;
-  if (!configured) return DEFAULT_API_ORIGIN;
-  try {
-    return new URL(configured).origin;
-  } catch {
-    return `https://${configured}`;
-  }
-}
+// Undefined when VITE_API_BASE_URL is set to an invalid value; no request is
+// made in that case.
+const API_ORIGIN = originOf(
+  resolveEndpointHost(import.meta.env.VITE_API_BASE_URL, DEFAULT_API_HOST),
+);
 
 // Discriminated outcome of a single upload attempt. `ok` carries the full
 // validated response body -- `budget_exhausted: true` is still `ok` (a saved
@@ -122,6 +115,7 @@ export async function uploadConversations(
   if (request.conversations.length > MAX_CONVERSATIONS_PER_REQUEST) {
     return { status: "oversize_batch" };
   }
+  if (API_ORIGIN === undefined) return { status: "network" };
 
   let accessToken: string;
   try {
@@ -130,7 +124,7 @@ export async function uploadConversations(
     return { status: "auth_unavailable" };
   }
 
-  const url = new URL(INGEST_PATH, apiOrigin()).toString();
+  const url = new URL(INGEST_PATH, API_ORIGIN).toString();
 
   let response: Response;
   try {

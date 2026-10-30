@@ -1,6 +1,7 @@
 import { logger } from "../logger";
 import { setAuthBlob, setPendingAuthFlow, clearPendingAuthFlow, type AuthBlob } from "../storage";
 import { buildAuthorizeUrl } from "./authorize-url";
+import { AUTH_ORIGIN } from "./config";
 import { exchangeCode } from "./exchange";
 import { getRedirectUri, launchWebAuthFlow } from "./launch";
 import { generatePkce, generateState } from "./pkce";
@@ -52,6 +53,10 @@ function authBlobFrom(
 //   4. verify the returned state matches (CSRF defense)
 //   5. exchange the code for tokens, write authBlob, clear pendingAuthFlow
 export async function pair(): Promise<PairResult> {
+  if (AUTH_ORIGIN === undefined) {
+    logger.warn("auth host not configured; pairing blocked", {});
+    return { ok: false, reason: "network" };
+  }
   const redirectUri = getRedirectUri();
   const { codeVerifier, codeChallenge } = await generatePkce();
   const state = generateState();

@@ -124,6 +124,11 @@ secrets belong in any committed file.
 - `VITE_API_BASE_URL` -- gubbi API base URL (default `https://api.gubbi.ai`).
 - `VITE_AUTH_HOST` -- auth issuer host (default `auth.gubbi.ai`).
 
+Both accept an https origin or a bare host, with no port, credentials, path,
+query, fragment or wildcard (parsed by `src/lib/net/endpoint-host.mjs`). The
+default applies only when a variable is unset; an invalid or empty value
+contributes no allowed host, so requests to that endpoint are blocked.
+
 The browser identities are committed constants in
 `scripts/browser-identity.mjs`, not environment variables: the Chrome `key`
 manifest field (the PUBLIC half of the signing key, which fixes the extension

@@ -87,7 +87,6 @@ type TokenEndpointOutcome =
   | { readonly kind: "reconnect" };
 
 async function callTokenEndpoint(refreshToken: string): Promise<TokenEndpointOutcome> {
-  const url = new URL(TOKEN_PATH, AUTH_ORIGIN).toString();
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: refreshToken,
@@ -96,6 +95,7 @@ async function callTokenEndpoint(refreshToken: string): Promise<TokenEndpointOut
 
   let response: Response;
   try {
+    const url = new URL(TOKEN_PATH, AUTH_ORIGIN).toString();
     response = await guardedFetch(url, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },

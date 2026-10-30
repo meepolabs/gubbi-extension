@@ -13,30 +13,31 @@
 // are the only other documented network egress for this extension. Content
 // scripts never import this module.
 
-const DEFAULT_API_HOST = "api.gubbi.ai";
-const DEFAULT_AUTH_HOST = "auth.gubbi.ai";
+import { logger } from "../logger";
+import { DEFAULT_API_HOST, DEFAULT_AUTH_HOST, resolveEndpointHost } from "./endpoint-host.mjs";
 
-// Accepts either a full URL ("https://api.gubbi.ai") or a bare host
-// ("api.gubbi.ai") and returns the host, or undefined when unparseable.
-function hostFrom(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  try {
-    return new URL(value).host;
-  } catch {
-    try {
-      return new URL(`https://${value}`).host;
-    } catch {
-      return undefined;
-    }
+function configuredHost(
+  name: string,
+  value: string | undefined,
+  defaultHost: string,
+): string | undefined {
+  const host = resolveEndpointHost(value, defaultHost);
+  if (host === undefined) {
+    logger.warn("endpoint host rejected; requests to it are blocked", { variable: name });
   }
+  return host;
 }
 
-// Closed egress allowlist, frozen at build time. The verify gate asserts this
-// set is a subset of the manifest host_permissions.
-export const ALLOWED_HOSTS: ReadonlySet<string> = new Set([
-  hostFrom(import.meta.env.VITE_API_BASE_URL) ?? DEFAULT_API_HOST,
-  hostFrom(import.meta.env.VITE_AUTH_HOST) ?? DEFAULT_AUTH_HOST,
-]);
+// Closed egress allowlist, frozen at build time. An env var set to an invalid
+// value contributes no host, so requests to it are blocked rather than sent to
+// the prod default. The verify gate asserts this set is a subset of the
+// manifest host_permissions.
+export const ALLOWED_HOSTS: ReadonlySet<string> = new Set(
+  [
+    configuredHost("VITE_API_BASE_URL", import.meta.env.VITE_API_BASE_URL, DEFAULT_API_HOST),
+    configuredHost("VITE_AUTH_HOST", import.meta.env.VITE_AUTH_HOST, DEFAULT_AUTH_HOST),
+  ].filter((host): host is string => host !== undefined),
+);
 
 export function guardedFetch(input: string | URL, init?: RequestInit): Promise<Response> {
   const url = input instanceof URL ? input : new URL(input);

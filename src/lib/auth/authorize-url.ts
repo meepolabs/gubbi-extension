@@ -13,6 +13,7 @@ export interface AuthorizeUrlParams {
 }
 
 export function buildAuthorizeUrl(params: AuthorizeUrlParams): string {
+  if (AUTH_ORIGIN === undefined) throw new Error("Auth host is not configured");
   const url = new URL(AUTHORIZE_PATH, AUTH_ORIGIN);
   const search = new URLSearchParams({
     response_type: "code",

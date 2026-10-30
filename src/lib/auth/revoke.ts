@@ -22,13 +22,13 @@ const REVOKE_PATH = "/oauth2/revoke";
 // tolerated -- the local teardown below is what actually logs the user out, and
 // a stranded server-side token expires on its own.
 async function revokeRefreshToken(refreshToken: string): Promise<void> {
-  const url = new URL(REVOKE_PATH, AUTH_ORIGIN).toString();
   const body = new URLSearchParams({
     token: refreshToken,
     token_type_hint: "refresh_token",
     client_id: HYDRA_CLIENT_ID,
   });
   try {
+    const url = new URL(REVOKE_PATH, AUTH_ORIGIN).toString();
     await guardedFetch(url, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },

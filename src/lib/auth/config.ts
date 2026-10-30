@@ -4,21 +4,15 @@
 //
 // Background-only.
 
-const DEFAULT_AUTH_HOST = "auth.gubbi.ai";
+import { DEFAULT_AUTH_HOST, originOf, resolveEndpointHost } from "../net/endpoint-host.mjs";
+
 const DEFAULT_CLIENT_ID = "journal-extension";
 
-// Accepts a bare host ("auth.gubbi.ai") or a full URL; returns the origin.
-function authOrigin(): string {
-  const configured = import.meta.env.VITE_AUTH_HOST;
-  if (!configured) return `https://${DEFAULT_AUTH_HOST}`;
-  try {
-    return new URL(configured).origin;
-  } catch {
-    return `https://${configured}`;
-  }
-}
-
-export const AUTH_ORIGIN = authOrigin();
+// Undefined when VITE_AUTH_HOST is set to an invalid value: every auth request
+// then fails closed instead of reaching the prod issuer.
+export const AUTH_ORIGIN = originOf(
+  resolveEndpointHost(import.meta.env.VITE_AUTH_HOST, DEFAULT_AUTH_HOST),
+);
 export const HYDRA_CLIENT_ID = import.meta.env.VITE_HYDRA_CLIENT_ID ?? DEFAULT_CLIENT_ID;
 
 export const AUTHORIZE_PATH = "/oauth2/auth";
