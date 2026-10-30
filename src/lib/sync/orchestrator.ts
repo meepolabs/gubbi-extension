@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { ReconnectRequiredError } from "../auth/errors";
 import { tokenProvider as realTokenProvider } from "../auth/provider";
 import { logger } from "../logger";
@@ -254,6 +256,45 @@ async function clearPartialSaveCount(platform: AdapterPlatform): Promise<void> {
   await chrome.storage.local.remove(partialSaveKey(platform));
 }
 
+// ---- Force-committed conversations (persisted across wakes) -----------------
+//
+// The server reports only how many saves failed, not which, so a forced commit
+// remembers every conversation of its batch by id and watermark. A remembered
+// conversation is left out of later uploads: one that saved would only dedupe,
+// and one that keeps failing would otherwise start a new hold cycle each time
+// the rewind window lists it again. A change gives it a new watermark, so it is
+// sent again.
+
+const FORCED_COMMIT_KEY_PREFIX = "gubbi:forcedCommit:";
+
+const FingerprintsSchema = z.array(
+  z.object({ platformId: z.string(), watermark: z.string() }).readonly(),
+);
+
+type Fingerprint = z.infer<typeof FingerprintsSchema>[number];
+
+function forcedCommitKey(platform: AdapterPlatform): string {
+  return `${FORCED_COMMIT_KEY_PREFIX}${platform}`;
+}
+
+async function getForcedCommits(platform: AdapterPlatform): Promise<Fingerprint[]> {
+  const record = await chrome.storage.local.get(forcedCommitKey(platform));
+  const raw = record[forcedCommitKey(platform)];
+  const parsed = FingerprintsSchema.safeParse(raw);
+  return parsed.success ? parsed.data : [];
+}
+
+async function setForcedCommits(
+  platform: AdapterPlatform,
+  fingerprints: readonly Fingerprint[],
+): Promise<void> {
+  if (fingerprints.length === 0) {
+    await chrome.storage.local.remove(forcedCommitKey(platform));
+    return;
+  }
+  await chrome.storage.local.set({ [forcedCommitKey(platform)]: fingerprints });
+}
+
 // ---- Helpers -----------------------------------------------------------------
 
 function isoFromMs(ms: number): string {
@@ -503,9 +544,10 @@ interface ListingScope {
 async function uploadBatches(
   deps: RunSyncDeps,
   platform: AdapterPlatform,
-  request: IngestConversationRequest,
+  listed: IngestConversationRequest,
   listing: ListingScope,
 ): Promise<UploadLoopResult> {
+  const request = await withoutForcedCommits(platform, listed);
   const plan = toBatches(request);
   const cursorBefore = await getCursor(platform);
   const result = await uploadAllBatches(deps, platform, plan);
@@ -514,7 +556,55 @@ async function uploadBatches(
     if (target !== undefined) await advanceCursor(platform, target);
   }
   await recordDroppedOversize(platform, plan.dropped, cursorBefore);
+  await pruneForcedCommits(platform);
   return result;
+}
+
+function isSameConversation(conversation: ConversationPayload, fingerprint: Fingerprint): boolean {
+  return (
+    conversation.platform_id === fingerprint.platformId &&
+    compareTimestamps(watermarkOf(conversation), fingerprint.watermark) === 0
+  );
+}
+
+async function withoutForcedCommits(
+  platform: AdapterPlatform,
+  request: IngestConversationRequest,
+): Promise<IngestConversationRequest> {
+  const remembered = await getForcedCommits(platform);
+  if (remembered.length === 0) return request;
+  return {
+    ...request,
+    conversations: request.conversations.filter(
+      (conversation) =>
+        !remembered.some((fingerprint) => isSameConversation(conversation, fingerprint)),
+    ),
+  };
+}
+
+async function rememberForcedCommit(
+  platform: AdapterPlatform,
+  batch: IngestConversationRequest,
+): Promise<void> {
+  const remembered = await getForcedCommits(platform);
+  const added = batch.conversations.map((conversation) => ({
+    platformId: conversation.platform_id,
+    watermark: watermarkOf(conversation),
+  }));
+  await setForcedCommits(platform, [...remembered, ...added]);
+}
+
+// A conversation at or before the listing's `since` is not listed again unless
+// it changes, so its fingerprint can go; this keeps the set to the conversations
+// inside the rewind window of the cursor.
+async function pruneForcedCommits(platform: AdapterPlatform): Promise<void> {
+  const remembered = await getForcedCommits(platform);
+  const since = effectiveSince(await getCursor(platform));
+  if (remembered.length === 0 || since === undefined) return;
+  const kept = remembered.filter(
+    (fingerprint) => compareTimestamps(fingerprint.watermark, since) > 0,
+  );
+  if (kept.length !== remembered.length) await setForcedCommits(platform, kept);
 }
 
 async function uploadAllBatches(
@@ -662,6 +752,7 @@ async function applyPartialSave(
       skipped: response.extractions_skipped_error,
       nowMs: deps.now(),
     });
+    await rememberForcedCommit(platform, batch);
     await clearTransientCount(platform);
     await clearPartialSaveCount(platform);
     return { kind: "continue" };

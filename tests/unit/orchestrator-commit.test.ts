@@ -29,6 +29,7 @@ const PAST_ANY_PAUSE_MS = 2 * 60 * 60 * 1000;
 const CURSOR_KEY = "gubbi:cursor:chatgpt";
 const PAUSE_KEY = "gubbi:pauseState:chatgpt";
 const COUNTERS_KEY = "gubbi:counters";
+const FORCED_COMMIT_KEY = "gubbi:forcedCommit:chatgpt";
 
 type Store = Record<string, unknown>;
 
@@ -298,7 +299,54 @@ describe("consecutive partial saves", () => {
     expect(transientAfterCommit).toBeUndefined();
     expect(countersOf(h.store).conversations_skipped).toBe(2);
     expect(countersOf(h.store).conversations_uploaded).toBe(1);
-    expect(server.sends).toHaveLength(PARTIAL_SAVE_HOLD_LIMIT + 2);
+    expect(server.sends).toHaveLength(PARTIAL_SAVE_HOLD_LIMIT + 1);
+  });
+
+  it("does not hold or count again a force-committed conversation until it changes", async () => {
+    // Arrange: "bad" never saves and stays inside the rewind window of the
+    // cursor its forced commit sets, so every later listing returns it.
+    const corpus: ConversationPayload[] = [
+      conversation("ok1", minuteOf(DAY, 1)),
+      conversation("bad", minuteOf(DAY, 3)),
+    ];
+    const server = fakeServer(new Set(["bad"]));
+    const h = harness(corpus, server.upload);
+    for (let run = 0; run <= PARTIAL_SAVE_HOLD_LIMIT; run += 1) await h.run();
+    const skippedAfterCommit = countersOf(h.store).conversations_skipped;
+    const sendsAfterCommit = server.sends.length;
+
+    // Act
+    for (let run = 0; run <= PARTIAL_SAVE_HOLD_LIMIT; run += 1) await h.run();
+    const pauseAfterSecondCycle = h.store[PAUSE_KEY];
+    const skippedAfterSecondCycle = countersOf(h.store).conversations_skipped;
+    const sendsAfterSecondCycle = server.sends.length;
+    corpus[1] = conversation("bad", minuteOf(DAY, 4));
+    await h.run();
+
+    // Assert
+    expect(skippedAfterCommit).toBe(1);
+    expect(pauseAfterSecondCycle).toBeUndefined();
+    expect(skippedAfterSecondCycle).toBe(1);
+    expect(sendsAfterSecondCycle).toBe(sendsAfterCommit);
+    expect(server.sends.at(-1)).toEqual(["bad"]);
+  });
+
+  it("forgets force-committed conversations once the cursor is past their rewind window", async () => {
+    // Arrange
+    const corpus: ConversationPayload[] = [conversation("bad", minuteOf(DAY, 3))];
+    const failing = new Set(["bad"]);
+    const h = harness(corpus, fakeServer(failing).upload);
+    for (let run = 0; run <= PARTIAL_SAVE_HOLD_LIMIT; run += 1) await h.run();
+    const rememberedAfterCommit = h.store[FORCED_COMMIT_KEY];
+    corpus.push(conversation("later", minuteOf(DAY, 30)));
+
+    // Act
+    await h.run();
+
+    // Assert
+    expect(rememberedAfterCommit).toBeDefined();
+    expect(h.store[CURSOR_KEY]).toBe(minuteOf(DAY, 30));
+    expect(h.store[FORCED_COMMIT_KEY]).toBeUndefined();
   });
 
   it("restarts the hold streak after a clean save", async () => {

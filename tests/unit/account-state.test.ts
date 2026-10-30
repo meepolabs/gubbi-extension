@@ -16,6 +16,11 @@ describe("clearAccountState", () => {
     ["drift counter", "gubbi:drift:chatgpt", 2],
     ["transient counter", "gubbi:transient:claude", 3],
     ["partial-save counter", "gubbi:partialSave:chatgpt", 1],
+    [
+      "force-committed conversations",
+      "gubbi:forcedCommit:chatgpt",
+      [{ platformId: "c1", watermark: "2026-01-01T00:00:00Z" }],
+    ],
     ["counters", "gubbi:counters", { conversations_uploaded: 4 }],
     ["status", "gubbi:status:chatgpt", "error"],
     ["last run", "gubbi:lastRunAt:claude", "2026-01-01T00:00:00Z"],
