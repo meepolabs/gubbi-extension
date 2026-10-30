@@ -33,7 +33,7 @@ describe("ClaudeNormalizer", () => {
     expect(result.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
-  it("maps a system sender to role system", () => {
+  it("drops a system sender turn from the payload", () => {
     // Arrange
     const raw = cloneRaw();
     const messages = raw.chat_messages as Array<Record<string, unknown>>;
@@ -43,7 +43,7 @@ describe("ClaudeNormalizer", () => {
     const result = normalizer.normalizeConversation(raw)!;
 
     // Assert
-    expect(result.messages[0]!.role).toBe("system");
+    expect(result.messages.map((m) => m.role)).toEqual(["assistant"]);
   });
 
   it("orders messages by their index field", () => {

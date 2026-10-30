@@ -33,11 +33,23 @@ describe("ChatGptNormalizer", () => {
     const raw = cloneRaw();
 
     // Act: the active path is system -> user -> tool -> code -> assistant-text.
-    // Only the text turns survive, in chronological order.
+    // Only the user and assistant text turns survive, in chronological order.
     const result = normalizer.normalizeConversation(raw)!;
 
     // Assert
-    expect(result.messages.map((m) => m.role)).toEqual(["system", "user", "assistant"]);
+    expect(result.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("drops a system-role turn from the payload", () => {
+    // Arrange: the active path carries a system text turn.
+    const raw = cloneRaw();
+
+    // Act
+    const result = normalizer.normalizeConversation(raw)!;
+
+    // Assert
+    expect(result.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(result.messages.map((m) => m.content)).not.toContain("You are a helpful assistant.");
   });
 
   it("drops a tool-role node entirely (no fold prefix, no marker)", () => {
@@ -66,7 +78,7 @@ describe("ChatGptNormalizer", () => {
     expect(contents.some((c) => c.includes("```"))).toBe(false);
   });
 
-  it("keeps only the plain text of user / assistant / system turns", () => {
+  it("keeps only the plain text of user / assistant turns", () => {
     // Arrange
     const raw = cloneRaw();
 
@@ -75,7 +87,6 @@ describe("ChatGptNormalizer", () => {
 
     // Assert
     expect(result.messages.map((m) => m.content)).toEqual([
-      "You are a helpful assistant.",
       "Sort these numbers for me please.",
       "Here you go: the numbers are now sorted in ascending order.",
     ]);
@@ -97,7 +108,7 @@ describe("ChatGptNormalizer", () => {
     const contents = result.messages.map((m) => m.content);
     expect(contents.some((c) => c.includes("[image]"))).toBe(false);
     expect(contents.some((c) => c.includes("[file]"))).toBe(false);
-    expect(result.messages.map((m) => m.role)).toEqual(["system", "user"]);
+    expect(result.messages.map((m) => m.role)).toEqual(["user"]);
   });
 
   it("converts an epoch-seconds create_time to an ISO-8601 string", () => {
@@ -115,15 +126,17 @@ describe("ChatGptNormalizer", () => {
   it("attaches a per-message ISO timestamp and null-skips create_time:null nodes", () => {
     // Arrange
     const raw = cloneRaw();
+    const mapping = raw.mapping as Record<string, { message?: { create_time?: unknown } }>;
+    mapping["node-assistant-final"]!.message!.create_time = null;
 
     // Act
     const result = normalizer.normalizeConversation(raw)!;
 
-    // Assert: the system node has create_time null -> no timestamp field; the
+    // Assert: the assistant node has create_time null -> no timestamp field; the
     // user node has a numeric create_time -> an ISO timestamp.
-    const system = result.messages.find((m) => m.role === "system")!;
+    const assistant = result.messages.find((m) => m.role === "assistant")!;
     const user = result.messages.find((m) => m.role === "user")!;
-    expect(system.timestamp).toBeUndefined();
+    expect(assistant.timestamp).toBeUndefined();
     expect(user.timestamp).toBe(new Date(1717603260 * 1000).toISOString());
   });
 
@@ -177,7 +190,6 @@ describe("ChatGptNormalizer", () => {
 
     // Assert
     expect(result.messages.map((m) => m.message_id)).toEqual([
-      "node-system",
       "node-user-1",
       "node-assistant-final",
     ]);

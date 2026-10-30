@@ -148,6 +148,9 @@ export const IngestConversationResponseSchema = z.object({
 });
 
 export type Role = z.infer<typeof RoleSchema>;
+// RoleSchema keeps "system" to match the backend contract, which still accepts
+// it from older builds; the connectors never produce one.
+export type CollectedRole = Exclude<Role, "system">;
 export type Platform = z.infer<typeof PlatformSchema>;
 export type IngestSource = z.infer<typeof IngestSourceSchema>;
 export type MessagePayload = z.infer<typeof MessagePayloadSchema>;

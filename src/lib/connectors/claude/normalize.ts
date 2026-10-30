@@ -1,5 +1,9 @@
 import type { ConversationNormalizer, NormalizedConversation } from "../base";
-import { ConversationPayloadSchema, type MessagePayload, type Role } from "../../schema/ingest";
+import {
+  ConversationPayloadSchema,
+  type CollectedRole,
+  type MessagePayload,
+} from "../../schema/ingest";
 
 // Claude raw -> ConversationPayload normalizer. BACKGROUND/LIB ONLY -- imports
 // the Zod schema runtime; never reached from a content script. Returns null
@@ -19,7 +23,7 @@ import { ConversationPayloadSchema, type MessagePayload, type Role } from "../..
 // With no leaf at all, chat_messages is taken in `index` order.
 //
 // TEXT-ONLY rule: journal only the plain text of content blocks of type "text"
-// for messages whose sender maps to user / assistant / system. Every other
+// for messages whose sender maps to user / assistant. Every other
 // block type (thinking, tool_use, tool_result, artifact, ...) and any
 // attachments / files are dropped entirely -- no folding, no markers, no
 // placeholders, and attachment content is never read.
@@ -50,12 +54,11 @@ interface RawConversation {
 
 const BLOCK_SEPARATOR = "\n";
 
-// "human" -> "user"; "assistant" -> "assistant"; a "system" sender (should it
-// ever appear) -> "system". Any other sender is dropped.
-function mapSender(sender: string | undefined): Role | null {
+// "human" -> "user"; "assistant" -> "assistant". Any other sender, including
+// "system", is dropped.
+function mapSender(sender: string | undefined): CollectedRole | null {
   if (sender === "human") return "user";
   if (sender === "assistant") return "assistant";
-  if (sender === "system") return "system";
   return null;
 }
 

@@ -1,5 +1,9 @@
 import type { ConversationNormalizer, NormalizedConversation } from "../base";
-import { ConversationPayloadSchema, type MessagePayload, type Role } from "../../schema/ingest";
+import {
+  ConversationPayloadSchema,
+  type CollectedRole,
+  type MessagePayload,
+} from "../../schema/ingest";
 
 // ChatGPT raw -> ConversationPayload normalizer. BACKGROUND/LIB ONLY -- it
 // imports the Zod schema runtime and must never be reached from a content
@@ -15,7 +19,7 @@ import { ConversationPayloadSchema, type MessagePayload, type Role } from "../..
 // message is sent with its node id as message_id.
 //
 // TEXT-ONLY rule: journal only the plain text of messages whose author.role is
-// user / assistant / system AND whose content_type is "text". Everything else
+// user / assistant AND whose content_type is "text". Everything else
 // (tool turns, code / execution_output / multimodal_text content, ...) is
 // dropped entirely -- no folding, no markers, no placeholders.
 
@@ -56,14 +60,13 @@ function epochSecondsToIso(value: number | null | undefined): string | null {
   return Number.isNaN(ms) ? null : date.toISOString();
 }
 
-// ChatGPT author roles map straight onto the ingest Role enum. Any other role
-// (notably "tool") is dropped -- only user / assistant / system turns are
+// ChatGPT author roles map straight onto the ingest role names. Any other role
+// (notably "system" and "tool") is dropped -- only user / assistant turns are
 // journaled.
-function mapRole(rawRole: string | undefined): Role | null {
+function mapRole(rawRole: string | undefined): CollectedRole | null {
   switch (rawRole) {
     case "user":
     case "assistant":
-    case "system":
       return rawRole;
     default:
       return null;
