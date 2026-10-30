@@ -3,6 +3,7 @@ import { defineBackground } from "wxt/utils/define-background";
 import { pair, runStartupRecovery, unpair } from "../src/lib/auth";
 import type { AdapterPlatform } from "../src/lib/connectors/base";
 import { handleControlMessage, type ControlDeps } from "../src/lib/control/handlers";
+import { originOf } from "../src/lib/control/sender";
 import { logger } from "../src/lib/logger";
 import { isControlMessageType } from "../src/lib/messages";
 import { runSync } from "../src/lib/sync/orchestrator";
@@ -68,6 +69,7 @@ async function triggerSync(platform?: AdapterPlatform): Promise<void> {
 function controlDeps(): ControlDeps {
   return {
     runtimeId: chrome.runtime.id,
+    extensionOrigin: originOf(chrome.runtime.getURL("")) ?? "",
     ensureRecovered,
     startSync: (platform) => void triggerSync(platform),
     pair,

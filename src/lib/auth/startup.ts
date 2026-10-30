@@ -1,10 +1,22 @@
+import { LockContendedError } from "../locks";
 import { logger } from "../logger";
-import { getAuthBlob, getRefreshState, setAuthBlob, clearRefreshState } from "../storage";
+import {
+  AUTH_LOCK_KEY,
+  getAuthBlob,
+  getRefreshState,
+  setAuthBlob,
+  clearRefreshState,
+} from "../storage";
+import { withAuthLockOrBusy } from "./transition";
 
 // Startup recovery: the ambiguous-refresh detector. Call ONCE at service-worker
 // startup, before any refresh can run.
 //
 // Background-only.
+//
+// The read-modify-write runs under the auth lock so an unpair cannot clear the
+// blob between our read and our write (which would resurrect the credentials).
+// A lock that stays busy rejects, and the caller retries on its next trigger.
 //
 // MV3 service workers are killed aggressively. A refresh can be interrupted
 // after refreshState was written but before the new authBlob was persisted -- at
@@ -23,6 +35,11 @@ import { getAuthBlob, getRefreshState, setAuthBlob, clearRefreshState } from "..
 //       good; just clear refreshState.
 //   refreshState absent -> no-op.
 export async function runStartupRecovery(): Promise<void> {
+  const outcome = await withAuthLockOrBusy(recoverWithinLock);
+  if (outcome.kind === "busy") throw new LockContendedError(AUTH_LOCK_KEY);
+}
+
+async function recoverWithinLock(): Promise<void> {
   const refreshState = await getRefreshState();
   if (!refreshState) return;
 

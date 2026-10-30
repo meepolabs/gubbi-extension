@@ -1,16 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The pair() orchestration is mocked at its three boundaries: storage, the
-// guarded-fetch egress (token exchange), and chrome.identity.launchWebAuthFlow.
-// PKCE and authorize-url stay real (pure, fast). The launch driver in launch.ts
-// reads chrome.identity, so we stub that global.
-
-vi.mock("../../src/lib/storage", () => ({
-  setPendingAuthFlow: vi.fn(async () => undefined),
-  clearPendingAuthFlow: vi.fn(async () => undefined),
-  getPendingAuthFlow: vi.fn(async () => undefined),
-  setAuthBlob: vi.fn(async () => undefined),
-}));
+// pair() runs over the real storage layer on an in-memory chrome.storage stub;
+// the guarded-fetch egress (token exchange) and chrome.identity are the mocked
+// boundaries. PKCE and authorize-url stay real (pure, fast).
 
 vi.mock("../../src/lib/net/fetch", () => ({
   guardedFetch: vi.fn(),
@@ -18,24 +10,25 @@ vi.mock("../../src/lib/net/fetch", () => ({
 
 import { pair } from "../../src/lib/auth";
 import { guardedFetch } from "../../src/lib/net/fetch";
-import { clearPendingAuthFlow, setAuthBlob, setPendingAuthFlow } from "../../src/lib/storage";
+import { getAuthBlob, getPendingAuthFlow } from "../../src/lib/storage";
+import { stubChromeStorage, type StorageStub } from "../helpers/chrome-stub";
 
 const REDIRECT_URI = "https://abcdef.chromiumapp.org/";
-
-// Records the order in which boundary calls fire so the test can assert that the
-// pending flow is persisted BEFORE the auth window is launched.
-let callLog: string[] = [];
 
 // Captures the `state` that pair() put on the authorize URL, so the stubbed
 // launch can echo it back (happy path) or corrupt it (mismatch path).
 let lastLaunchedState: string | undefined;
 
+let storage: StorageStub;
+
 function stubIdentity(launch: (url: string) => Promise<string>): void {
+  const chromeWithStorage = (globalThis as unknown as { chrome: Record<string, unknown> }).chrome;
   const chromeMock = {
+    ...chromeWithStorage,
     identity: {
       getRedirectURL: vi.fn(() => REDIRECT_URI),
       launchWebAuthFlow: vi.fn(async (details: { url: string; interactive: boolean }) => {
-        callLog.push("launch");
+        storage.writeLog.push("launch");
         const parsed = new URL(details.url);
         lastLaunchedState = parsed.searchParams.get("state") ?? undefined;
         return launch(details.url);
@@ -64,15 +57,16 @@ function tokenResponse(): Response {
 }
 
 beforeEach(() => {
-  callLog = [];
   lastLaunchedState = undefined;
-  vi.mocked(setPendingAuthFlow).mockImplementation(async () => {
-    callLog.push("setPendingAuthFlow");
-  });
+  storage = stubChromeStorage();
+  for (const level of ["info", "warn"] as const) {
+    vi.spyOn(console, level).mockImplementation(() => undefined);
+  }
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
@@ -87,8 +81,8 @@ describe("pair (happy path)", () => {
 
     // Assert
     expect(result).toEqual({ ok: true });
-    const persistIndex = callLog.indexOf("setPendingAuthFlow");
-    const launchIndex = callLog.indexOf("launch");
+    const persistIndex = storage.writeLog.indexOf("set:gubbi:pendingAuthFlow");
+    const launchIndex = storage.writeLog.indexOf("launch");
     expect(persistIndex).toBeGreaterThanOrEqual(0);
     expect(launchIndex).toBeGreaterThan(persistIndex);
   });
@@ -115,14 +109,13 @@ describe("pair (happy path)", () => {
     expect(body.get("redirect_uri")).toBe(REDIRECT_URI);
 
     // Assert: authBlob written with derived fields, pending flow cleared.
-    expect(setAuthBlob).toHaveBeenCalledTimes(1);
-    const blob = vi.mocked(setAuthBlob).mock.calls[0]![0];
-    expect(blob.accessToken).toBe("ory_at_abc");
-    expect(blob.refreshToken).toBe("ory_rt_xyz");
-    expect(blob.status).toBe("ok");
-    expect(blob.version).toBe(1);
-    expect(Date.parse(blob.accessTokenExpiresAt)).toBeGreaterThan(Date.now());
-    expect(clearPendingAuthFlow).toHaveBeenCalledTimes(1);
+    const blob = await getAuthBlob();
+    expect(blob?.accessToken).toBe("ory_at_abc");
+    expect(blob?.refreshToken).toBe("ory_rt_xyz");
+    expect(blob?.status).toBe("ok");
+    expect(blob?.version).toBe(1);
+    expect(Date.parse(blob!.accessTokenExpiresAt)).toBeGreaterThan(Date.now());
+    expect(await getPendingAuthFlow()).toBeUndefined();
   });
 });
 
@@ -137,7 +130,7 @@ describe("pair (state mismatch)", () => {
 
     // Assert
     expect(result).toEqual({ ok: false, reason: "state_mismatch" });
-    expect(setAuthBlob).not.toHaveBeenCalled();
+    expect(await getAuthBlob()).toBeUndefined();
     expect(guardedFetch).not.toHaveBeenCalled();
   });
 });
@@ -154,7 +147,7 @@ describe("pair (user cancel)", () => {
 
     // Assert
     expect(result).toEqual({ ok: false, reason: "user_cancelled" });
-    expect(setAuthBlob).not.toHaveBeenCalled();
+    expect(await getAuthBlob()).toBeUndefined();
   });
 
   it("maps an error= redirect to user_cancelled", async () => {
@@ -166,7 +159,7 @@ describe("pair (user cancel)", () => {
 
     // Assert
     expect(result).toEqual({ ok: false, reason: "user_cancelled" });
-    expect(setAuthBlob).not.toHaveBeenCalled();
+    expect(await getAuthBlob()).toBeUndefined();
   });
 });
 
@@ -181,7 +174,7 @@ describe("pair (exchange failures)", () => {
 
     // Assert
     expect(result).toEqual({ ok: false, reason: "exchange_failed" });
-    expect(setAuthBlob).not.toHaveBeenCalled();
+    expect(await getAuthBlob()).toBeUndefined();
   });
 
   it("maps a 5xx token response to network and writes no authBlob", async () => {
@@ -194,7 +187,7 @@ describe("pair (exchange failures)", () => {
 
     // Assert
     expect(result).toEqual({ ok: false, reason: "network" });
-    expect(setAuthBlob).not.toHaveBeenCalled();
+    expect(await getAuthBlob()).toBeUndefined();
   });
 
   it("maps a thrown network error to network and writes no authBlob", async () => {
@@ -207,6 +200,51 @@ describe("pair (exchange failures)", () => {
 
     // Assert
     expect(result).toEqual({ ok: false, reason: "network" });
-    expect(setAuthBlob).not.toHaveBeenCalled();
+    expect(await getAuthBlob()).toBeUndefined();
+  });
+});
+
+describe("pair (re-pairing over a previous account)", () => {
+  it("clears the previous account's sync state and keeps the platform enabled flags", async () => {
+    // Arrange
+    const previousAccount = {
+      "gubbi:authBlob": {
+        version: 6,
+        accessToken: "at_previous",
+        accessTokenExpiresAt: "2026-01-01T00:00:00.000Z",
+        refreshToken: "rt_previous",
+        status: "reconnect_required",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+      "gubbi:cursor:chatgpt": "2026-01-01T00:00:00.000Z",
+      "gubbi:cursor:claude": "2026-01-02T00:00:00.000Z",
+      "gubbi:pauseState:claude": { pausedUntil: "2099-01-01T00:00:00.000Z", reason: "drift" },
+      "gubbi:drift:chatgpt": 2,
+      "gubbi:transient:claude": 1,
+      "gubbi:counters": { conversations_uploaded: 9, conversations_skipped: 1, last_run_at: null },
+      "gubbi:forcedCommit:chatgpt": [{ platformId: "c1", watermark: "2026-01-01T00:00:00Z" }],
+      "gubbi:detailStop:claude": { platformId: "c2", failures: 1 },
+      "gubbi:status:chatgpt": "reconnect_required",
+      "gubbi:refreshState": {
+        ownerId: "dead-worker",
+        authVersionBefore: 6,
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
+    };
+    const devicePreferences = { "gubbi:enabled:chatgpt": false, "gubbi:enabled:claude": true };
+    Object.assign(storage.store, previousAccount, devicePreferences);
+    stubIdentity(async () => redirectWith({ code: "auth-code", state: lastLaunchedState! }));
+    vi.mocked(guardedFetch).mockResolvedValue(tokenResponse());
+
+    // Act
+    const result = await pair();
+
+    // Assert
+    expect(result).toEqual({ ok: true });
+    for (const key of Object.keys(previousAccount).filter((key) => key !== "gubbi:authBlob")) {
+      expect(storage.store, key).not.toHaveProperty([key]);
+    }
+    expect(storage.store).toMatchObject(devicePreferences);
+    expect(await getAuthBlob()).toMatchObject({ refreshToken: "ory_rt_xyz", version: 1 });
   });
 });

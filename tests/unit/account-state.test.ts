@@ -39,13 +39,14 @@ describe("clearAccountState", () => {
     expect(key in store).toBe(false);
   });
 
-  it("keeps the locks, the schema version, the enabled flags and foreign keys", async () => {
+  it("keeps the locks, the schema version, the account generation, the enabled flags and foreign keys", async () => {
     // Arrange
     const { store } = stubChromeStorage();
     const kept = {
       "gubbi:lease": lockRecord,
       "gubbi:authLock": lockRecord,
       "gubbi:schema_version": 1,
+      "gubbi:accountGeneration": 3,
       "gubbi:enabled:chatgpt": false,
       "gubbi:enabled:claude": true,
       "other:cursor:chatgpt": "x",

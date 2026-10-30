@@ -90,6 +90,16 @@ describe("toPopupView platforms", () => {
     );
   });
 
+  it("renders an ended pause, which the background reports as idle, without a pause line", () => {
+    const view = toPopupView(
+      snapshot({ platforms: [platform({ status: "idle", pauseReason: null, pausedUntil: null })] }),
+      formatTime,
+    );
+
+    expect(view.platforms[0]?.statusText).toBe("Idle");
+    expect(view.platforms[0]?.pauseText).toBeNull();
+  });
+
   it("shows no pause line for a platform that is not paused", () => {
     const view = toPopupView(snapshot(), formatTime);
 

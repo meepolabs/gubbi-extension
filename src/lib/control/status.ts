@@ -26,7 +26,9 @@ async function readPlatformStatus(platform: Platform, nowMs: number): Promise<Pl
   return {
     platform,
     enabled,
-    status,
+    // The orchestrator only rewrites status on its next run, so a pause that has
+    // ended still reads "paused" until then; without its window it is idle.
+    status: status === "paused" && activePause === undefined ? "idle" : status,
     pausedUntil: activePause?.pausedUntil ?? null,
     pauseReason: activePause?.reason ?? null,
     lastRunAt: lastRunAt ?? null,

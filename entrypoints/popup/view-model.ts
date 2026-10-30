@@ -66,6 +66,8 @@ const PAIR_FAILURE_TEXT: Record<PairFailureReason, string> = {
   user_cancelled: "Pairing was cancelled.",
   exchange_failed: "Pairing failed. Try again.",
   network: "Network error while pairing. Try again.",
+  superseded: "Disconnected while pairing. Pair again to connect.",
+  busy: "A sync is running. Try again in a moment.",
 };
 
 const CONTROL_ERROR_TEXT: Record<ControlErrorReason, string> = {

@@ -3,6 +3,7 @@ import { guardedFetch } from "../net/fetch";
 import { HTTP_SERVER_ERROR_FLOOR, HTTP_UNAUTHORIZED } from "../net/http-constants";
 import {
   getAuthBlob,
+  getRefreshState,
   setAuthBlob,
   setRefreshState,
   clearRefreshState,
@@ -138,6 +139,15 @@ async function callTokenEndpoint(refreshToken: string): Promise<TokenEndpointOut
 export async function refreshWithinLock(ownerId: string): Promise<string> {
   const blob = await getAuthBlob();
   if (!blob || blob.status === "reconnect_required") {
+    throw new ReconnectRequiredError();
+  }
+
+  // A marker left behind means an earlier refresh may have spent this token
+  // without persisting the rotation (e.g. a storage write threw after the POST).
+  // Startup recovery only runs once per worker, so the check is repeated here.
+  if ((await getRefreshState()) !== undefined) {
+    await markReconnectRequired(blob);
+    logger.warn("leftover refresh marker; reconnect required", {});
     throw new ReconnectRequiredError();
   }
 

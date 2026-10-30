@@ -17,7 +17,8 @@ vi.mock("../../src/lib/auth", () => ({ runStartupRecovery, pair, unpair }));
 vi.mock("../../src/lib/sync/orchestrator", () => ({ runSync }));
 
 const RUNTIME_ID = "extension-under-test";
-const POPUP_SENDER = { id: RUNTIME_ID };
+const EXTENSION_ORIGIN = `chrome-extension://${RUNTIME_ID}`;
+const POPUP_SENDER = { id: RUNTIME_ID, origin: EXTENSION_ORIGIN };
 
 type MessageListener = (
   message: unknown,
@@ -38,6 +39,7 @@ function stubChromeCapturing(): ChromeCapture {
   const chromeMock = {
     runtime: {
       id: RUNTIME_ID,
+      getURL: vi.fn((path: string) => `${EXTENSION_ORIGIN}/${path}`),
       onInstalled: { addListener: vi.fn() },
       onStartup: { addListener: vi.fn((l: () => void) => (capture.startupListener = l)) },
       onMessage: { addListener: vi.fn((l: MessageListener) => (capture.messageListener = l)) },
@@ -174,7 +176,7 @@ describe("background control message routing", () => {
 
     capture.messageListener!(
       { type: "SYNC_START" },
-      { id: RUNTIME_ID, tab: { id: 3 } },
+      { id: RUNTIME_ID, tab: { id: 3 }, origin: "https://chatgpt.com" },
       sendResponse,
     );
     await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());

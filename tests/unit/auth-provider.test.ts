@@ -10,7 +10,13 @@ vi.mock("../../src/lib/net/fetch", () => ({ guardedFetch: vi.fn() }));
 import { guardedFetch } from "../../src/lib/net/fetch";
 import { getAccessToken, forceRefresh } from "../../src/lib/auth/provider";
 import { ReconnectRequiredError } from "../../src/lib/auth/errors";
-import { setAuthBlob, getAuthBlob, type AuthBlob } from "../../src/lib/storage";
+import {
+  setAuthBlob,
+  getAuthBlob,
+  getRefreshState,
+  setRefreshState,
+  type AuthBlob,
+} from "../../src/lib/storage";
 import { stubChromeStorageWithEvents as stubChromeStorage } from "../helpers/chrome-stub";
 
 function blob(overrides: Partial<AuthBlob> = {}): AuthBlob {
@@ -120,6 +126,31 @@ describe("forceRefresh", () => {
 
     // Act + Assert
     await expect(forceRefresh()).rejects.toBeInstanceOf(ReconnectRequiredError);
+  });
+});
+
+describe("refresh with a leftover refresh marker", () => {
+  it("treats the marker as a possibly spent token: no token call, reconnect required", async () => {
+    // Arrange: an earlier refresh in this worker sent the token but never
+    // persisted the rotation, so its marker still names the current version.
+    stubChromeStorage();
+    await setAuthBlob(blob({ version: 4 }));
+    await setRefreshState({
+      ownerId: "earlier-refresh",
+      authVersionBefore: 4,
+      startedAt: new Date().toISOString(),
+    });
+    vi.mocked(guardedFetch).mockResolvedValue(rotatedResponse());
+
+    // Act
+    const outcome = forceRefresh();
+
+    // Assert
+    await expect(outcome).rejects.toBeInstanceOf(ReconnectRequiredError);
+    expect(guardedFetch).not.toHaveBeenCalled();
+    expect((await getAuthBlob())?.status).toBe("reconnect_required");
+    expect((await getAuthBlob())?.refreshToken).toBe("rt_1");
+    expect(await getRefreshState()).toBeUndefined();
   });
 });
 

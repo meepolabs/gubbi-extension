@@ -1,5 +1,6 @@
 import { PlatformSchema } from "./schema/ingest";
 import {
+  ACCOUNT_GENERATION_KEY,
   AUTH_LOCK_KEY,
   SCHEMA_VERSION_KEY,
   STORAGE_KEY_PREFIX,
@@ -16,14 +17,16 @@ import {
 //
 // Background-only.
 
-// The lease and auth lock are kept because unpair holds both while sweeping;
-// removing them would release them early and wake any waiter. The enabled flags
-// are a device preference, not account state.
+// The lease and auth lock are kept because unpair and pairing hold both while
+// sweeping; removing them would release them early and wake any waiter. The
+// enabled flags are a device preference, not account state, and the account
+// generation must outlive the account it counts.
 function keptKeys(): ReadonlySet<string> {
   return new Set([
     SYNC_LEASE_KEY,
     AUTH_LOCK_KEY,
     SCHEMA_VERSION_KEY,
+    ACCOUNT_GENERATION_KEY,
     ...PlatformSchema.options.map((platform) => platformEnabledKey(platform)),
   ]);
 }

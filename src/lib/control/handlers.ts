@@ -15,6 +15,8 @@ import { readStatusSnapshot } from "./status";
 
 export interface ControlDeps {
   readonly runtimeId: string;
+  // Origin of this extension's own pages, e.g. "chrome-extension://<id>".
+  readonly extensionOrigin: string;
   readonly ensureRecovered: () => Promise<void>;
   // Starts a sync sweep without waiting for it; must never reject.
   readonly startSync: (platform?: Platform) => void;
@@ -92,7 +94,7 @@ export async function handleControlMessage(
   sender: chrome.runtime.MessageSender | undefined,
   deps: ControlDeps,
 ): Promise<ControlResponse> {
-  if (!isTrustedControlSender(sender, deps.runtimeId)) {
+  if (!isTrustedControlSender(sender, deps.runtimeId, deps.extensionOrigin)) {
     logger.warn("control message rejected", { reason: "forbidden_sender" });
     return controlError("forbidden_sender");
   }

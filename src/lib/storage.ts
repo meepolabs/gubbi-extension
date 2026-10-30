@@ -32,6 +32,7 @@ const Keys = {
   lastRunAt: (platform: Platform): string => `${KEY_PREFIX}lastRunAt:${platform}`,
   syncEvents: `${KEY_PREFIX}syncEvents`,
   schemaVersion: `${KEY_PREFIX}schema_version`,
+  accountGeneration: `${KEY_PREFIX}accountGeneration`,
   // The auth single-flight lock lives in src/lib/locks.ts; only its storage key
   // string is reserved here so the two modules agree on the namespace.
   authLock: `${KEY_PREFIX}authLock`,
@@ -50,6 +51,10 @@ export const AUTH_LOCK_KEY = Keys.authLock;
 export const SYNC_LEASE_KEY = Keys.lease;
 
 export const SCHEMA_VERSION_KEY = Keys.schemaVersion;
+
+// Advances on every unpair, so a pairing can tell that a disconnect happened
+// while its auth window was open. Survives the account-state sweep.
+export const ACCOUNT_GENERATION_KEY = Keys.accountGeneration;
 
 export const platformEnabledKey = Keys.enabled;
 
@@ -137,6 +142,8 @@ export const SyncEventSchema = z.object({
 export type SyncEvent = z.infer<typeof SyncEventSchema>;
 
 const SyncEventsSchema = z.array(SyncEventSchema);
+
+const AccountGenerationSchema = z.number().int().min(0);
 
 // Persisted storage-schema version, read once at startup.
 const SchemaVersionSchema = z.number().int();
@@ -267,6 +274,17 @@ export async function appendSyncEvent(entry: SyncEvent): Promise<void> {
   const existing = await getSyncEvents();
   const next = [...existing, entry].slice(-MAX_SYNC_EVENTS);
   await setItem(Keys.syncEvents, next);
+}
+
+export async function getAccountGeneration(): Promise<number> {
+  const generation = await getItem(Keys.accountGeneration, (raw) =>
+    AccountGenerationSchema.parse(raw),
+  );
+  return generation ?? 0;
+}
+
+export function setAccountGeneration(generation: number): Promise<void> {
+  return setItem(Keys.accountGeneration, generation);
 }
 
 export function getSchemaVersion(): Promise<number | undefined> {

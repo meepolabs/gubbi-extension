@@ -19,15 +19,23 @@ import { stubChromeStorage, type StorageStub } from "../helpers/chrome-stub";
 // chrome.storage stub; pair/unpair/sync/recovery are injected fakes.
 
 const RUNTIME_ID = "extension-under-test";
+const EXTENSION_ORIGIN = `chrome-extension://${RUNTIME_ID}`;
 const POPUP_SENDER: chrome.runtime.MessageSender = {
   id: RUNTIME_ID,
-  url: `chrome-extension://${RUNTIME_ID}/popup.html`,
+  url: `${EXTENSION_ORIGIN}/popup.html`,
+  origin: EXTENSION_ORIGIN,
 };
 const TAB_SENDER: chrome.runtime.MessageSender = {
   id: RUNTIME_ID,
   tab: { id: 7 } as chrome.tabs.Tab,
+  url: "https://chatgpt.com/c/abc",
+  origin: "https://chatgpt.com",
 };
-const FOREIGN_SENDER: chrome.runtime.MessageSender = { id: "some-other-extension" };
+const FOREIGN_SENDER: chrome.runtime.MessageSender = {
+  id: "some-other-extension",
+  url: "chrome-extension://some-other-extension/popup.html",
+  origin: "chrome-extension://some-other-extension",
+};
 
 const SEEDED_ACCESS_TOKEN = "seeded-access-token-7f3a91";
 const SEEDED_REFRESH_TOKEN = "seeded-refresh-token-c40e22";
@@ -82,6 +90,7 @@ function fakes(
   const unpair = vi.fn(overrides.unpair ?? (async (): Promise<UnpairResult> => ({ ok: true })));
   const deps: ControlDeps = {
     runtimeId: RUNTIME_ID,
+    extensionOrigin: EXTENSION_ORIGIN,
     ensureRecovered: async () => {
       order.push("recovery");
     },
@@ -110,6 +119,16 @@ describe("sender and payload checks", () => {
   it.each([
     ["a content script tab", TAB_SENDER],
     ["another extension", FOREIGN_SENDER],
+    [
+      "another extension id at this extension's origin",
+      { id: "some-other-extension", origin: EXTENSION_ORIGIN },
+    ],
+    [
+      "a page of this extension id at a web origin",
+      { id: RUNTIME_ID, origin: "https://example.test" },
+    ],
+    ["a sender with no origin or url", { id: RUNTIME_ID }],
+    ["a sender with an unparseable url", { id: RUNTIME_ID, url: "not a url" }],
     ["an unknown sender", undefined],
   ])("rejects SET_PLATFORM_ENABLED from %s and writes nothing", async (_label, sender) => {
     const { deps } = fakes();
@@ -152,12 +171,31 @@ describe("sender and payload checks", () => {
     expect(startSync).not.toHaveBeenCalled();
   });
 
-  it("applies a valid SET_PLATFORM_ENABLED from the extension's own page", async () => {
+  it.each([
+    ["the popup", POPUP_SENDER],
+    [
+      "an extension page open in a tab",
+      {
+        id: RUNTIME_ID,
+        tab: { id: 9 } as chrome.tabs.Tab,
+        url: `${EXTENSION_ORIGIN}/options.html`,
+        origin: EXTENSION_ORIGIN,
+      },
+    ],
+    [
+      "an extension page that reports only its url",
+      {
+        id: RUNTIME_ID,
+        tab: { id: 9 } as chrome.tabs.Tab,
+        url: `${EXTENSION_ORIGIN}/options.html`,
+      },
+    ],
+  ])("applies a valid SET_PLATFORM_ENABLED from %s", async (_label, sender) => {
     const { deps } = fakes();
 
     const response = await handleControlMessage(
       { type: "SET_PLATFORM_ENABLED", platform: "claude", enabled: false },
-      POPUP_SENDER,
+      sender,
       deps,
     );
 
@@ -253,15 +291,35 @@ describe("STATUS_REQUEST", () => {
     });
   });
 
-  it("nulls a pause whose window has already ended", async () => {
-    await setPauseState("chatgpt", {
-      pausedUntil: new Date(NOW_MS - 1).toISOString(),
-      reason: "rate_limited",
-    });
+  it.each([
+    ["paused", "idle"],
+    ["syncing", "syncing"],
+    ["reconnect_required", "reconnect_required"],
+  ] as const)(
+    "reports a %s platform whose pause window has ended as %s with no pause",
+    async (stored, reported) => {
+      await setStatus("chatgpt", stored);
+      await setPauseState("chatgpt", {
+        pausedUntil: new Date(NOW_MS - 1).toISOString(),
+        reason: "rate_limited",
+      });
+
+      const { platforms } = await status();
+
+      expect(platforms[0]).toMatchObject({
+        status: reported,
+        pausedUntil: null,
+        pauseReason: null,
+      });
+    },
+  );
+
+  it("reports a paused platform with no stored pause window as idle", async () => {
+    await setStatus("chatgpt", "paused");
 
     const { platforms } = await status();
 
-    expect(platforms[0]).toMatchObject({ pausedUntil: null, pauseReason: null });
+    expect(platforms[0]).toMatchObject({ status: "idle", pausedUntil: null, pauseReason: null });
   });
 
   it("reports the earliest scheduled sync alarm as nextSyncAt", async () => {

@@ -147,7 +147,7 @@ describe("unpair", () => {
       "gubbi:enabled:chatgpt": false,
       "gubbi:enabled:claude": true,
     };
-    Object.assign(store, swept, kept);
+    Object.assign(store, swept, kept, { "gubbi:accountGeneration": 2 });
     vi.mocked(guardedFetch).mockResolvedValue(new Response(null, { status: 200 }));
 
     // Act
@@ -155,7 +155,7 @@ describe("unpair", () => {
 
     // Assert
     expect(result).toEqual({ ok: true });
-    expect(store).toEqual(kept);
+    expect(store).toEqual({ ...kept, "gubbi:accountGeneration": 3 });
   });
 
   it("takes the sync lease before the auth lock", async () => {
