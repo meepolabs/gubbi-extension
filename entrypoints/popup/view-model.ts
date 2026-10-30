@@ -205,10 +205,13 @@ export function actionErrorText(response: unknown): string | null {
 // ---- Live status polling -------------------------------------------------
 
 export const POLL_INTERVAL_MS = 1_000;
+// A first sync can run for many minutes; past this window a live burst keeps
+// going at the slower interval instead of stopping.
+const FAST_POLL_WINDOW_MS = 60_000;
+export const SLOW_POLL_INTERVAL_MS = 5_000;
 // A run can start and finish between two polls; a burst opened by a click keeps
 // polling this long even when every snapshot reads idle.
 export const MIN_BURST_MS = 5_000;
-export const MAX_BURST_MS = 60_000;
 
 export interface PollBurst {
   readonly startedAt: number;
@@ -220,11 +223,22 @@ export function isLive(response: unknown): boolean {
   return response.pairing || response.platforms.some((status) => status.status === "syncing");
 }
 
-export function shouldKeepPolling(response: unknown, burst: PollBurst, now: number): boolean {
-  if (!isStatusSnapshot(response)) return false;
+// Milliseconds until the next poll, or null when the burst should stop.
+export function nextPollDelay(response: unknown, burst: PollBurst, now: number): number | null {
+  if (!isStatusSnapshot(response)) return null;
   const elapsed = now - burst.startedAt;
-  if (elapsed >= MAX_BURST_MS) return false;
-  return elapsed < burst.minMs || isLive(response);
+  if (isLive(response)) {
+    return elapsed < FAST_POLL_WINDOW_MS ? POLL_INTERVAL_MS : SLOW_POLL_INTERVAL_MS;
+  }
+  return elapsed < burst.minMs ? POLL_INTERVAL_MS : null;
+}
+
+export const NO_PLATFORM_TEXT = "Both platforms are off. Turn one on to sync.";
+
+// Why Sync now would do nothing, or null when a sync can start.
+export function syncBlockedText(response: unknown): string | null {
+  if (!isStatusSnapshot(response) || response.auth !== "ok") return null;
+  return response.platforms.some((status) => status.enabled) ? null : NO_PLATFORM_TEXT;
 }
 
 // ---- UI-only state that must survive a poll re-render -------------------------
@@ -248,6 +262,7 @@ export type UiEvent =
   | { readonly type: "disconnect_asked" }
   | { readonly type: "disconnect_cancelled" }
   | { readonly type: "burst_ended" }
+  | { readonly type: "sync_blocked"; readonly text: string }
   | { readonly type: "status_received"; readonly response: unknown };
 
 export const INITIAL_UI_STATE: UiState = {
@@ -269,6 +284,17 @@ function finishAction(state: UiState, action: FinishedAction, response: unknown)
   };
 }
 
+function receiveStatus(state: UiState, response: unknown): UiState {
+  const canDisconnect = isStatusSnapshot(response) && response.auth !== "none";
+  const isBlockedStale = state.notice === NO_PLATFORM_TEXT && syncBlockedText(response) === null;
+  if (canDisconnect && !isBlockedStale) return state;
+  return {
+    ...state,
+    confirmingDisconnect: canDisconnect && state.confirmingDisconnect,
+    notice: isBlockedStale ? null : state.notice,
+  };
+}
+
 export function reduceUi(state: UiState, event: UiEvent): UiState {
   switch (event.type) {
     case "action_started":
@@ -286,10 +312,10 @@ export function reduceUi(state: UiState, event: UiEvent): UiState {
       return { ...state, confirmingDisconnect: false };
     case "burst_ended":
       return { ...state, notice: null };
-    case "status_received": {
-      const canDisconnect = isStatusSnapshot(event.response) && event.response.auth !== "none";
-      return canDisconnect ? state : { ...state, confirmingDisconnect: false };
-    }
+    case "sync_blocked":
+      return { ...INITIAL_UI_STATE, notice: event.text };
+    case "status_received":
+      return receiveStatus(state, event.response);
   }
 }
 
@@ -297,7 +323,13 @@ export function reduceUi(state: UiState, event: UiEvent): UiState {
 // made outranks what the background reports.
 export function messageText(view: PopupView, ui: UiState): string {
   return (
-    ui.actionError ?? view.errorText ?? view.pairingText ?? view.pairFailureText ?? ui.notice ?? ""
+    ui.actionError ??
+    view.errorText ??
+    view.pairingText ??
+    view.pairFailureText ??
+    ui.notice ??
+    view.pauseSkipText ??
+    ""
   );
 }
 

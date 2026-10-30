@@ -4,15 +4,17 @@ import type { Platform } from "../../src/lib/schema/ingest";
 import {
   controlsView,
   defaultFormatTime,
+  DISCLOSURE_TEXT,
   focusKeyAfterRender,
   INITIAL_UI_STATE,
   isLive,
   messageText,
   MIN_BURST_MS,
+  nextPollDelay,
   platformKey,
   POLL_INTERVAL_MS,
   reduceUi,
-  shouldKeepPolling,
+  syncBlockedText,
   toPopupView,
   type ActionType,
   type ControlButton,
@@ -33,6 +35,16 @@ let burst: PollBurst | null = null;
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
 let focusedKey: string | null = null;
 let lastSignature = "";
+let requestedSeq = 0;
+let appliedSeq = 0;
+let rendering = false;
+
+interface Mounts {
+  readonly app: HTMLElement;
+  readonly actions: HTMLElement;
+  readonly status: HTMLElement;
+  readonly details: HTMLElement;
+}
 
 // Resolves undefined when the background never answers (no listener, or the
 // popup closed first); the view model treats that as a failure.
@@ -71,21 +83,31 @@ function dispatch(event: UiEvent): void {
   ui = reduceUi(ui, event);
 }
 
+// Replies can land out of order; one older than an already applied reply is
+// dropped so it cannot overwrite newer status.
 async function refresh(): Promise<void> {
-  lastResponse = await send({ type: "STATUS_REQUEST" });
-  dispatch({ type: "status_received", response: lastResponse });
+  const seq = ++requestedSeq;
+  const response = await send({ type: "STATUS_REQUEST" });
+  if (seq < appliedSeq) return;
+  appliedSeq = seq;
+  lastResponse = response;
+  dispatch({ type: "status_received", response });
   render();
 }
 
-function schedulePoll(): void {
+function schedulePoll(delayMs: number): void {
   clearTimeout(pollTimer);
-  pollTimer = setTimeout(() => logFailure(pollTick()), POLL_INTERVAL_MS);
+  pollTimer = setTimeout(() => logFailure(pollTick()), delayMs);
 }
 
 async function pollTick(): Promise<void> {
+  const mine = burst;
   await refresh();
-  if (burst !== null && shouldKeepPolling(lastResponse, burst, Date.now())) {
-    schedulePoll();
+  // A burst started while this tick awaited owns the schedule now.
+  if (mine === null || burst !== mine) return;
+  const delay = nextPollDelay(lastResponse, mine, Date.now());
+  if (delay !== null) {
+    schedulePoll(delay);
     return;
   }
   burst = null;
@@ -95,10 +117,16 @@ async function pollTick(): Promise<void> {
 
 function startBurst(minMs: number): void {
   burst = { startedAt: Date.now(), minMs };
-  schedulePoll();
+  schedulePoll(POLL_INTERVAL_MS);
 }
 
 async function runAction(type: ActionType): Promise<void> {
+  const blocked = type === "SYNC_START" ? syncBlockedText(lastResponse) : null;
+  if (blocked !== null) {
+    dispatch({ type: "sync_blocked", text: blocked });
+    render();
+    return;
+  }
   dispatch({ type: "action_started", action: type });
   render();
   // PAIR_START answers only when the whole sign-in flow ends, so the burst
@@ -133,12 +161,17 @@ const BUTTON_HANDLERS: Record<ControlKey, () => void> = {
   },
 };
 
+// An in-flight button is aria-disabled rather than disabled so it keeps focus
+// across the re-render; its clicks are ignored instead.
 function button(control: ControlButton): HTMLButtonElement {
   const node = element("button", control.label);
   node.type = "button";
-  node.disabled = control.disabled;
   node.dataset["key"] = control.key;
-  node.addEventListener("click", BUTTON_HANDLERS[control.key]);
+  if (control.disabled) {
+    node.setAttribute("aria-disabled", "true");
+  } else {
+    node.addEventListener("click", BUTTON_HANDLERS[control.key]);
+  }
   return node;
 }
 
@@ -162,25 +195,26 @@ function platformRow(view: PlatformView): HTMLElement {
   return row;
 }
 
-function buildChildren(): HTMLElement[] {
+interface Built {
+  readonly status: string;
+  readonly actions: HTMLElement[];
+  readonly details: HTMLElement[];
+}
+
+function buildView(): Built {
   const view = toPopupView(lastResponse, defaultFormatTime);
   const controls = controlsView(view, ui);
-  const primary = element("div");
-  primary.append(...controls.primary.map(button));
-  const status = element("p", messageText(view, ui));
-  status.setAttribute("role", "status");
-  const children: HTMLElement[] = [element("p", view.disclosure), primary, status];
-  if (view.pauseSkipText !== null) children.push(element("p", view.pauseSkipText));
+  const details: HTMLElement[] = [];
   if (controls.disconnect.length > 0) {
     const block = element("div");
     block.style.marginTop = "1em";
     if (controls.confirmText !== null) block.append(element("p", controls.confirmText));
     block.append(...controls.disconnect.map(button));
-    children.push(block);
+    details.push(block);
   }
-  children.push(...view.platforms.map(platformRow));
-  if (view.nextSyncText !== null) children.push(element("p", view.nextSyncText));
-  return children;
+  details.push(...view.platforms.map(platformRow));
+  if (view.nextSyncText !== null) details.push(element("p", view.nextSyncText));
+  return { status: messageText(view, ui), actions: controls.primary.map(button), details };
 }
 
 function restoreFocus(root: HTMLElement, previous: string | null): void {
@@ -194,42 +228,64 @@ function restoreFocus(root: HTMLElement, previous: string | null): void {
   keyed.find((node) => node.dataset["key"] === target)?.focus();
 }
 
+function signatureOf(nodes: readonly HTMLElement[]): string {
+  return nodes.map((node) => node.outerHTML).join("");
+}
+
+// The status region is mounted once and only its text changes, so assistive
+// tech announces the update instead of seeing a freshly inserted region.
 function render(): void {
-  const root = document.getElementById("app");
-  if (root === null) return;
-  const children = buildChildren();
+  if (mounts === null) return;
+  const built = buildView();
+  if (mounts.status.textContent !== built.status) mounts.status.textContent = built.status;
   // A poll that changes nothing must not rebuild the DOM: that would drop
   // focus and swallow a click whose mousedown landed on the old node.
-  const signature = children.map((child) => child.outerHTML).join("");
+  const signature = `${signatureOf(built.actions)}|${signatureOf(built.details)}`;
   if (signature === lastSignature) return;
   lastSignature = signature;
+  const { app } = mounts;
   const active = document.activeElement;
   const previous =
-    active instanceof HTMLElement && root.contains(active)
+    active instanceof HTMLElement && app.contains(active)
       ? (active.dataset["key"] ?? null)
       : focusedKey;
-  root.replaceChildren(...children);
-  restoreFocus(root, previous);
+  rendering = true;
+  try {
+    mounts.actions.replaceChildren(...built.actions);
+    mounts.details.replaceChildren(...built.details);
+  } finally {
+    rendering = false;
+  }
+  restoreFocus(app, previous);
 }
 
 function trackFocus(root: HTMLElement): void {
   root.addEventListener("focusin", (event) => {
     if (event.target instanceof HTMLElement) focusedKey = event.target.dataset["key"] ?? null;
   });
-  // A control that is still on screen and enabled lost focus because the user
-  // moved it away; forget it. Disabling or replacing a control keeps the key.
+  // Focus leaving a control outside a render means the user moved it away;
+  // forget it. A render replacing the control keeps the key for restoreFocus.
   root.addEventListener("focusout", (event) => {
-    const target = event.target;
-    if (event.relatedTarget !== null || !(target instanceof HTMLElement)) return;
-    if (target.isConnected && !(target as HTMLButtonElement).disabled) focusedKey = null;
+    if (rendering || event.relatedTarget !== null) return;
+    if (event.target instanceof HTMLElement && event.target.isConnected) focusedKey = null;
   });
 }
 
-async function start(root: HTMLElement): Promise<void> {
-  trackFocus(root);
+function findMounts(): Mounts | null {
+  const app = document.getElementById("app");
+  const actions = document.getElementById("actions");
+  const status = document.getElementById("status");
+  const details = document.getElementById("details");
+  if (app === null || actions === null || status === null || details === null) return null;
+  return { app, actions, status, details };
+}
+
+async function start(found: Mounts): Promise<void> {
+  document.getElementById("disclosure")?.replaceChildren(DISCLOSURE_TEXT);
+  trackFocus(found.app);
   await refresh();
   if (isLive(lastResponse)) startBurst(0);
 }
 
-const root = document.getElementById("app");
-if (root !== null) logFailure(start(root));
+const mounts = findMounts();
+if (mounts !== null) logFailure(start(mounts));

@@ -7,11 +7,14 @@ import {
   focusKeyAfterRender,
   INITIAL_UI_STATE,
   isLive,
-  MAX_BURST_MS,
   messageText,
   MIN_BURST_MS,
+  nextPollDelay,
+  NO_PLATFORM_TEXT,
+  POLL_INTERVAL_MS,
   reduceUi,
-  shouldKeepPolling,
+  SLOW_POLL_INTERVAL_MS,
+  syncBlockedText,
   toPopupView,
   type ActionType,
   type UiState,
@@ -299,27 +302,67 @@ describe("isLive", () => {
   });
 });
 
-describe("shouldKeepPolling", () => {
+describe("nextPollDelay", () => {
   const start = 1_000_000;
   const burst = { startedAt: start, minMs: MIN_BURST_MS };
   const syncing = snapshot({ platforms: [platform({ status: "syncing" })] });
 
-  it.each<[string, unknown, number, boolean]>([
-    ["no response stops at once", undefined, start + 1_000, false],
-    ["control error stops at once", { ok: false, reason: "internal" }, start + 1_000, false],
-    ["idle inside the minimum keeps polling", snapshot(), start + MIN_BURST_MS - 1, true],
-    ["idle at the minimum stops", snapshot(), start + MIN_BURST_MS, false],
-    ["syncing after the minimum keeps polling", syncing, start + 30_000, true],
-    ["pairing after the minimum keeps polling", snapshot({ pairing: true }), start + 30_000, true],
-    ["syncing at the cap stops", syncing, start + MAX_BURST_MS, false],
+  it.each<[string, unknown, number, number | null]>([
+    ["no response stops at once", undefined, start + 1_000, null],
+    ["control error stops at once", { ok: false, reason: "internal" }, start + 1_000, null],
+    ["idle inside the minimum polls fast", snapshot(), start + MIN_BURST_MS - 1, POLL_INTERVAL_MS],
+    ["idle at the minimum stops", snapshot(), start + MIN_BURST_MS, null],
+    ["syncing after the minimum polls fast", syncing, start + 30_000, POLL_INTERVAL_MS],
+    [
+      "pairing after the minimum polls fast",
+      snapshot({ pairing: true }),
+      start + 30_000,
+      POLL_INTERVAL_MS,
+    ],
+    ["syncing just inside the first minute polls fast", syncing, start + 59_999, POLL_INTERVAL_MS],
+    ["syncing after the first minute slows down", syncing, start + 60_000, SLOW_POLL_INTERVAL_MS],
+    [
+      "syncing after ten minutes keeps polling slowly",
+      syncing,
+      start + 600_000,
+      SLOW_POLL_INTERVAL_MS,
+    ],
+    ["idle after a long sync stops", snapshot(), start + 600_000, null],
   ])("%s", (_name, response, now, expected) => {
-    expect(shouldKeepPolling(response, burst, now)).toBe(expected);
+    expect(nextPollDelay(response, burst, now)).toBe(expected);
   });
 
-  it("a burst opened on a live snapshot with no minimum stops once idle", () => {
-    expect(shouldKeepPolling(snapshot(), { startedAt: start, minMs: 0 }, start + 1_000)).toBe(
-      false,
-    );
+  it.each<[string, unknown, number | null]>([
+    ["live at load keeps polling", snapshot({ pairing: true }), POLL_INTERVAL_MS],
+    ["idle stops", snapshot(), null],
+  ])("a burst with no minimum: %s", (_name, response, expected) => {
+    expect(nextPollDelay(response, { startedAt: start, minMs: 0 }, start + 1_000)).toBe(expected);
+  });
+});
+
+describe("syncBlockedText", () => {
+  const off = (name: "chatgpt" | "claude"): PlatformStatus =>
+    platform({ platform: name, enabled: false });
+
+  it.each<[string, unknown, string | null]>([
+    [
+      "both platforms off",
+      snapshot({ platforms: [off("chatgpt"), off("claude")] }),
+      NO_PLATFORM_TEXT,
+    ],
+    [
+      "one platform on",
+      snapshot({ platforms: [off("chatgpt"), platform({ platform: "claude" })] }),
+      null,
+    ],
+    ["both platforms on", snapshot(), null],
+    ["no response", undefined, null],
+  ])("%s", (_name, response, expected) => {
+    expect(syncBlockedText(response)).toBe(expected);
+  });
+
+  it("names both platforms being off", () => {
+    expect(NO_PLATFORM_TEXT).toBe("Both platforms are off. Turn one on to sync.");
   });
 });
 
@@ -374,6 +417,42 @@ describe("reduceUi", () => {
     expect(reduceUi(asked, { type: "disconnect_cancelled" })).toEqual(ui());
   });
 
+  it("a blocked sync shows its notice and clears the error and confirmation", () => {
+    const state = ui({ actionError: "x", notice: "Sync started.", confirmingDisconnect: true });
+
+    expect(reduceUi(state, { type: "sync_blocked", text: NO_PLATFORM_TEXT })).toEqual(
+      ui({ notice: NO_PLATFORM_TEXT }),
+    );
+  });
+
+  it.each<[string, unknown, string | null]>([
+    [
+      "turning a platform on clears it",
+      snapshot({ platforms: [platform(), platform({ platform: "claude", enabled: false })] }),
+      null,
+    ],
+    [
+      "both still off keeps it",
+      snapshot({
+        platforms: [platform({ enabled: false }), platform({ platform: "claude", enabled: false })],
+      }),
+      NO_PLATFORM_TEXT,
+    ],
+  ])("the both-off notice on a status update: %s", (_name, response, notice) => {
+    const state = reduceUi(ui({ notice: NO_PLATFORM_TEXT }), { type: "status_received", response });
+
+    expect(state.notice).toBe(notice);
+  });
+
+  it("a status update keeps an unrelated notice", () => {
+    const state = reduceUi(ui({ notice: "Sync started." }), {
+      type: "status_received",
+      response: snapshot(),
+    });
+
+    expect(state.notice).toBe("Sync started.");
+  });
+
   it("ending a poll burst clears only the notice", () => {
     const state = ui({ notice: "Sync started.", actionError: "x", confirmingDisconnect: true });
 
@@ -399,6 +478,10 @@ describe("reduceUi", () => {
 
 describe("messageText precedence", () => {
   const failed = snapshot({ auth: "none", pairFailure: "network" });
+  const skipping = snapshot({
+    platforms: [paused("chatgpt", PAUSE_END_EARLY), paused("claude", PAUSE_END_LATE)],
+  });
+  const skipText = `Paused platforms are skipped until their pause ends. The first pause ends <${PAUSE_END_EARLY}>.`;
 
   it.each<[string, unknown, UiState, string]>([
     [
@@ -416,6 +499,8 @@ describe("messageText precedence", () => {
     ],
     ["persisted pair failure", failed, ui(), "Network error while pairing. Try again."],
     ["notice", snapshot(), ui({ notice: "Sync started." }), "Sync started."],
+    ["notice beats the pause skip", skipping, ui({ notice: "Sync started." }), "Sync started."],
+    ["pause skip", skipping, ui(), skipText],
     ["nothing to say", snapshot(), ui(), ""],
   ])("%s", (_name, response, state, expected) => {
     expect(messageText(toPopupView(response, formatTime), state)).toBe(expected);
