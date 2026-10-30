@@ -6,6 +6,7 @@ import { LockContendedError, withStorageLock } from "../locks";
 import {
   appendSyncEvent,
   clearPauseState,
+  getAuthBlob,
   getCounters,
   getCursor,
   getPauseState,
@@ -1028,6 +1029,14 @@ async function enabledPlatforms(
 export async function runSync(options: RunSyncOptions = {}): Promise<void> {
   const deps: RunSyncDeps = { ...realDeps, ...(options.deps ?? {}) };
   const candidates = options.platform !== undefined ? [options.platform] : ALL_PLATFORMS;
+
+  // Checked before the lease so an unpaired wake writes nothing: the periodic
+  // alarm outlives Disconnect, and a run would crawl the user's history only to
+  // fail at upload and recreate the account state unpair just swept.
+  if ((await getAuthBlob()) === undefined) {
+    logger.debug("sync skipped; no paired account", {});
+    return;
+  }
 
   try {
     await withStorageLock(SYNC_LEASE_KEY, SYNC_LEASE_TTL_MS, async () => {

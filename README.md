@@ -163,7 +163,10 @@ pnpm verify && pnpm zip && node scripts/verify-manifest.mjs
 
 `pnpm verify` builds with those values and checks both manifests against
 them; `pnpm zip` packages the same configuration. `pnpm zip` rebuilds
-`.output/` before zipping, so the final check verifies the tree that was zipped. Remove `.env.local` before
+`.output/` before zipping, so the final check verifies the tree that was zipped.
+The verifier's OK line does not print the hosts: to see which hosts the
+artifact carries, read `host_permissions` in `.output/chrome-mv3/manifest.json`
+and `.output/firefox-mv3/manifest.json`. Remove `.env.local` before
 building a production artifact: the verifier would otherwise accept the
 non-production hosts it was given.
 

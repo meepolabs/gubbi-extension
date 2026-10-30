@@ -9,14 +9,14 @@ export function isTrustedControlSender(
 ): boolean {
   if (sender === undefined) return false;
   if (sender.id !== runtimeId) return false;
-  const origin = sender.origin ?? (sender.url === undefined ? undefined : originOf(sender.url));
+  const origin = sender.origin ?? (sender.url === undefined ? undefined : urlOrigin(sender.url));
   return origin !== undefined && origin === extensionOrigin;
 }
 
 // URL.origin is the opaque "null" for schemes the URL standard does not know,
 // which includes chrome-extension: and moz-extension: outside the browser, so the
 // origin is assembled from scheme and host instead.
-export function originOf(url: string): string | undefined {
+export function urlOrigin(url: string): string | undefined {
   try {
     const parsed = new URL(url);
     if (parsed.host === "") return undefined;

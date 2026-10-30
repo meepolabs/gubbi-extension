@@ -104,3 +104,20 @@ export function stubChromeStorageWithEvents(): EventfulStorageStub {
   vi.stubGlobal("chrome", chromeMock);
   return { store };
 }
+
+// A schema-valid stored auth blob: sync runs only for a paired account.
+export const PAIRED_AUTH_BLOB = {
+  version: 1,
+  accessToken: "access-token",
+  accessTokenExpiresAt: "2099-01-01T00:00:00.000Z",
+  refreshToken: "refresh-token",
+  status: "ok",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+} as const;
+
+// stubChromeStorageWithEvents with a paired account already stored.
+export function stubPairedChromeStorage(): EventfulStorageStub {
+  const stub = stubChromeStorageWithEvents();
+  stub.store["gubbi:authBlob"] = { ...PAIRED_AUTH_BLOB };
+  return stub;
+}

@@ -12,7 +12,7 @@ import type { IngestConversationRequest } from "../../src/lib/schema/ingest";
 import { collectFromTab } from "../../src/lib/sync/collect";
 import { runSync, type RunSyncDeps } from "../../src/lib/sync/orchestrator";
 import type { TokenProvider } from "../../src/lib/token-provider";
-import { stubChromeStorageWithEvents } from "../helpers/chrome-stub";
+import { stubPairedChromeStorage } from "../helpers/chrome-stub";
 
 import rawChatGpt from "../fixtures/raw-chatgpt-conversation.json";
 
@@ -147,7 +147,7 @@ afterEach(() => {
 describe("runSync with a detail fetch truncated by a 429", () => {
   it("commits the oldest watermark and re-lists from before every uncollected conversation", async () => {
     // Arrange
-    const { store } = stubChromeStorageWithEvents();
+    const { store } = stubPairedChromeStorage();
     const sendMessage = stubTab(RATE_LIMITED);
     const clock = { nowMs: Date.parse("2026-06-06T12:00:00.000Z") };
     const { deps, upload } = makeDeps(clock);
@@ -183,7 +183,7 @@ describe("runSync with a detail fetch failing with a retryable non-429 error", (
     "$name: commits only the oldest watermark and re-lists the failed conversation",
     async ({ failure, pauseReason }) => {
       // Arrange
-      const { store } = stubChromeStorageWithEvents();
+      const { store } = stubPairedChromeStorage();
       const sendMessage = stubTab(failure);
       const clock = { nowMs: Date.parse("2026-06-06T12:00:00.000Z") };
       const { deps, upload } = makeDeps(clock);

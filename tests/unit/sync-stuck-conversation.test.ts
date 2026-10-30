@@ -12,7 +12,7 @@ import type { IngestConversationRequest } from "../../src/lib/schema/ingest";
 import { collectFromTab } from "../../src/lib/sync/collect";
 import { runSync, type RunSyncDeps } from "../../src/lib/sync/orchestrator";
 import type { TokenProvider } from "../../src/lib/token-provider";
-import { stubChromeStorageWithEvents } from "../helpers/chrome-stub";
+import { stubPairedChromeStorage } from "../helpers/chrome-stub";
 
 import rawChatGpt from "../fixtures/raw-chatgpt-conversation.json";
 
@@ -176,7 +176,7 @@ afterEach(() => {
 describe("a conversation whose detail fetch fails with a 500 on every run", () => {
   it("is skipped once after the stop limit, letting newer conversations through", async () => {
     // Arrange
-    const { store } = stubChromeStorageWithEvents();
+    const { store } = stubPairedChromeStorage();
     const tab = stubTab(failsOn("middle", SERVER_ERROR));
     const clock = startClock();
     const { deps, upload } = makeDeps(clock);
@@ -204,7 +204,7 @@ describe("a conversation whose detail fetch fails with a 500 on every run", () =
   it("is not fetched again while unchanged, and is fetched once its updated_at moves", async () => {
     // Arrange: the newest conversation is stuck, so the cursor never passes it
     // and only the remembered skip keeps it out of later runs.
-    const { store } = stubChromeStorageWithEvents();
+    const { store } = stubPairedChromeStorage();
     const tab = stubTab(failsOn("newest", SERVER_ERROR));
     const clock = startClock();
     const { deps } = makeDeps(clock);
@@ -227,7 +227,7 @@ describe("a conversation whose detail fetch fails with a 500 on every run", () =
 
   it("is counted once even when the run that skips it stops for a lost session", async () => {
     // Arrange
-    const { store } = stubChromeStorageWithEvents();
+    const { store } = stubPairedChromeStorage();
     const tab = stubTab((id, run) => {
       if (id === "middle") return SERVER_ERROR;
       return id === "newest" && run === STOP_LIMIT + 1 ? SESSION_LOST : null;
@@ -247,7 +247,7 @@ describe("a conversation whose detail fetch fails with a 500 on every run", () =
 
   it("restarts the count after a run that fetches it successfully", async () => {
     // Arrange
-    const { store } = stubChromeStorageWithEvents();
+    const { store } = stubPairedChromeStorage();
     const succeedsOnRun = STOP_LIMIT;
     const tab = stubTab((id, run) =>
       id === "newest" && run !== succeedsOnRun ? SERVER_ERROR : null,
@@ -267,7 +267,7 @@ describe("a conversation whose detail fetch fails with a 500 on every run", () =
 describe("stops that do not reach the bound", () => {
   it("never skips a conversation for a lost session, however often it stops there", async () => {
     // Arrange
-    const { store } = stubChromeStorageWithEvents();
+    const { store } = stubPairedChromeStorage();
     const tab = stubTab(failsOn("middle", SESSION_LOST));
     const clock = startClock();
     const { deps } = makeDeps(clock);
@@ -284,7 +284,7 @@ describe("stops that do not reach the bound", () => {
 
   it("never skips either of two conversations whose failures alternate", async () => {
     // Arrange
-    const { store } = stubChromeStorageWithEvents();
+    const { store } = stubPairedChromeStorage();
     const failingOn = (run: number): ConversationId => (run % 2 === 1 ? "middle" : "oldest");
     const tab = stubTab((id, run) => (id === failingOn(run) ? SERVER_ERROR : null));
     const clock = startClock();

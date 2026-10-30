@@ -15,7 +15,7 @@ import {
   type RunSyncDeps,
 } from "../../src/lib/sync/orchestrator";
 import type { TokenProvider } from "../../src/lib/token-provider";
-import { stubChromeStorageWithEvents } from "../helpers/chrome-stub";
+import { stubPairedChromeStorage } from "../helpers/chrome-stub";
 
 // When the per-platform cursor may move. A cursor that moves too far skips
 // conversations forever; one that never moves re-collects them on every run.
@@ -122,7 +122,7 @@ function harness(
   corpus: readonly ConversationPayload[],
   upload: Upload = savedEverything,
 ): Harness {
-  const { store } = stubChromeStorageWithEvents();
+  const { store } = stubPairedChromeStorage();
   const clock = { nowMs: START_MS };
   const collect = corpusCollect(corpus);
   const tokenProvider: TokenProvider = {

@@ -10,6 +10,7 @@ import type {
 } from "../../src/lib/schema/ingest";
 import type { SyncStatusState } from "../../src/lib/messages";
 import type { TokenProvider } from "../../src/lib/token-provider";
+import { clearAccountState } from "../../src/lib/account-state";
 import { runSync, type RunSyncDeps } from "../../src/lib/sync/orchestrator";
 import { INGEST_MAX_BODY_BYTES, serializeRequest, uploadConversations } from "../../src/lib/api";
 import { LockContendedError } from "../../src/lib/locks";
@@ -21,7 +22,10 @@ import {
   setSourceRequestTiming,
 } from "../../src/lib/connectors/http";
 import { collectFromTab } from "../../src/lib/sync/collect";
-import { stubChromeStorageWithEvents as stubChrome } from "../helpers/chrome-stub";
+import {
+  stubChromeStorageWithEvents,
+  stubPairedChromeStorage as stubChrome,
+} from "../helpers/chrome-stub";
 
 import rawClaudeConversation from "../fixtures/raw-claude-conversation.json";
 
@@ -1380,5 +1384,56 @@ describe("per-platform lastRunAt", () => {
     // Assert
     expect(bundle.collect).not.toHaveBeenCalled();
     expect(stub.store["gubbi:lastRunAt:chatgpt"]).toBe(previous);
+  });
+});
+
+describe("unpaired runs", () => {
+  it("does nothing and writes nothing when no account is paired", async () => {
+    // Arrange
+    const stub = stubChromeStorageWithEvents();
+    const bundle = makeDeps();
+
+    // Act
+    await runSync({ deps: bundle.deps });
+
+    // Assert
+    expect(bundle.findTab).not.toHaveBeenCalled();
+    expect(bundle.collect).not.toHaveBeenCalled();
+    expect(bundle.setStatus).not.toHaveBeenCalled();
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
+    expect(stub.store).toEqual({});
+  });
+
+  it("syncs as before when an account is paired", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const bundle = makeDeps();
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(bundle.collect).toHaveBeenCalledTimes(1);
+    expect(bundle.upload).toHaveBeenCalledTimes(1);
+    expect(cursorOf(stub.store, "chatgpt")).toBe("2026-02-01T00:00:00.000Z");
+    expect(stub.store["gubbi:lastRunAt:chatgpt"]).toBe(new Date(NOW_MS).toISOString());
+  });
+
+  it("recreates no account state after the account is cleared", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const bundle = makeDeps();
+    await runSync({ deps: bundle.deps });
+    expect(stub.store["gubbi:syncEvents"]).toBeDefined();
+    await clearAccountState();
+    const afterUnpair = structuredClone(stub.store);
+    bundle.collect.mockClear();
+
+    // Act
+    await runSync({ deps: bundle.deps });
+
+    // Assert
+    expect(bundle.collect).not.toHaveBeenCalled();
+    expect(stub.store).toEqual(afterUnpair);
   });
 });
