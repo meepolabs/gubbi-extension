@@ -25,7 +25,11 @@ import {
 } from "../api";
 import { collectFromTab as realCollect, type CollectOutcome } from "./collect";
 import type { AdapterPlatform } from "../connectors/base";
-import type { IngestConversationRequest, ConversationPayload } from "../schema/ingest";
+import type {
+  IngestConversationRequest,
+  IngestConversationResponse,
+  ConversationPayload,
+} from "../schema/ingest";
 import { MAX_CONVERSATIONS_PER_REQUEST } from "../schema/ingest";
 import type { SyncStatusState } from "../messages";
 import type { TokenProvider } from "../token-provider";
@@ -77,6 +81,12 @@ const CURSOR_REWIND_MS = 60 * 1000;
 // the "drift" pause: a sustained normalize failure signals the connector has
 // diverged from the platform's payload shape, not one stray bad conversation.
 export const DRIFT_THRESHOLD = 5;
+
+// A 200 that reports failed saves holds the cursor so the batch is re-sent; this
+// many consecutive holds per platform, and the next partial save commits anyway
+// and counts its failures as skipped, so one conversation the server can never
+// save cannot stall the platform for good.
+export const PARTIAL_SAVE_HOLD_LIMIT = 5;
 
 // Transient backoff: a base window grown per consecutive transient failure and
 // capped, with jitter so many clients do not retry in lockstep.
@@ -222,6 +232,28 @@ async function bumpTransientCount(platform: AdapterPlatform): Promise<number> {
   return next;
 }
 
+// ---- Partial-save hold counter (persisted across wakes) ----------------------
+
+const PARTIAL_SAVE_KEY_PREFIX = "gubbi:partialSave:";
+
+function partialSaveKey(platform: AdapterPlatform): string {
+  return `${PARTIAL_SAVE_KEY_PREFIX}${platform}`;
+}
+
+async function getPartialSaveCount(platform: AdapterPlatform): Promise<number> {
+  const record = await chrome.storage.local.get(partialSaveKey(platform));
+  const raw = record[partialSaveKey(platform)];
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+}
+
+async function setPartialSaveCount(platform: AdapterPlatform, count: number): Promise<void> {
+  await chrome.storage.local.set({ [partialSaveKey(platform)]: count });
+}
+
+async function clearPartialSaveCount(platform: AdapterPlatform): Promise<void> {
+  await chrome.storage.local.remove(partialSaveKey(platform));
+}
+
 // ---- Helpers -----------------------------------------------------------------
 
 function isoFromMs(ms: number): string {
@@ -234,23 +266,20 @@ function watermarkOf(conversation: ConversationPayload): string {
   return conversation.updated_at ?? conversation.created_at;
 }
 
-// Watermarks may carry differing UTC offsets, so text order is not time order.
-function watermarkMs(conversation: ConversationPayload): number {
-  return timestampMs(watermarkOf(conversation));
-}
-
 const FRACTIONAL_SECONDS = /T\d{2}:\d{2}:\d{2}[.,](\d+)/;
 
 // Digits of the fractional second beyond milliseconds, which Date.parse drops.
 // Platforms keep microseconds, so two distinct instants can share a millisecond.
 // Offsets are whole minutes, so they never change these digits.
-function subMillisecondDigits(conversation: ConversationPayload): string {
-  const match = FRACTIONAL_SECONDS.exec(watermarkOf(conversation));
+function subMillisecondDigits(timestamp: string): string {
+  const match = FRACTIONAL_SECONDS.exec(timestamp);
   return match?.[1]?.slice(3) ?? "";
 }
 
-function compareWatermarks(a: ConversationPayload, b: ConversationPayload): number {
-  const msDiff = watermarkMs(a) - watermarkMs(b);
+// Orders timestamps by instant: they may carry differing UTC offsets, so text
+// order is not time order.
+function compareTimestamps(a: string, b: string): number {
+  const msDiff = timestampMs(a) - timestampMs(b);
   if (msDiff !== 0) return msDiff;
   const aDigits = subMillisecondDigits(a);
   const bDigits = subMillisecondDigits(b);
@@ -259,6 +288,14 @@ function compareWatermarks(a: ConversationPayload, b: ConversationPayload): numb
   const bPadded = bDigits.padEnd(width, "0");
   if (aPadded === bPadded) return 0;
   return aPadded < bPadded ? -1 : 1;
+}
+
+function compareWatermarks(a: ConversationPayload, b: ConversationPayload): number {
+  return compareTimestamps(watermarkOf(a), watermarkOf(b));
+}
+
+function laterTimestamp(a: string, b: string): string {
+  return compareTimestamps(a, b) >= 0 ? a : b;
 }
 
 // The effective `since` passed to collect: the stored cursor rewound by
@@ -281,7 +318,7 @@ const ARRAY_SEPARATOR_BYTES = 1;
 interface BatchPlan {
   readonly batches: IngestConversationRequest[];
   // Conversations whose request alone would exceed the body cap; never uploaded.
-  readonly droppedCount: number;
+  readonly dropped: readonly ConversationPayload[];
 }
 
 // Split a request's conversations into batches of at most BATCH_SIZE whose
@@ -294,14 +331,14 @@ function toBatches(request: IngestConversationRequest): BatchPlan {
   const sorted = [...request.conversations].sort(compareWatermarks);
   const envelopeBytes = utf8Bytes(serializeRequest({ source: request.source, conversations: [] }));
   const batches: IngestConversationRequest[] = [];
-  let droppedCount = 0;
+  const dropped: ConversationPayload[] = [];
   let current: ConversationPayload[] = [];
   let currentBytes = envelopeBytes;
 
   for (const conversation of sorted) {
     const conversationBytes = utf8Bytes(JSON.stringify(conversation));
     if (envelopeBytes + conversationBytes > INGEST_MAX_BODY_BYTES) {
-      droppedCount += 1;
+      dropped.push(conversation);
       continue;
     }
     const added = conversationBytes + (current.length > 0 ? ARRAY_SEPARATOR_BYTES : 0);
@@ -315,36 +352,68 @@ function toBatches(request: IngestConversationRequest): BatchPlan {
     currentBytes += added;
   }
   if (current.length > 0) batches.push({ source: request.source, conversations: current });
-  return { batches, droppedCount };
+  return { batches, dropped };
 }
 
+// A dropped conversation is counted in the run whose cursor first moves past
+// it, so it is counted once however often it is re-listed: a run that stops
+// before it does not count it, and a later run starting past it does not either.
 async function recordDroppedOversize(
   platform: AdapterPlatform,
-  droppedCount: number,
+  dropped: readonly ConversationPayload[],
+  cursorBefore: string | undefined,
 ): Promise<void> {
-  if (droppedCount === 0) return;
+  const cursorAfter = await getCursor(platform);
+  if (cursorAfter === undefined) return;
+  const passed = dropped.filter(
+    (conversation) =>
+      (cursorBefore === undefined ||
+        compareTimestamps(watermarkOf(conversation), cursorBefore) > 0) &&
+      compareTimestamps(watermarkOf(conversation), cursorAfter) <= 0,
+  ).length;
+  if (passed === 0) return;
   logger.warn("dropped conversations larger than the request body cap", {
     platform,
-    dropped: droppedCount,
+    dropped: passed,
     maxBodyBytes: INGEST_MAX_BODY_BYTES,
   });
+  await addCounters({ skipped: passed });
+}
+
+function newestWatermark(conversations: readonly ConversationPayload[]): string | undefined {
+  let max: ConversationPayload | undefined;
+  for (const conversation of conversations) {
+    if (max === undefined || compareWatermarks(conversation, max) > 0) max = conversation;
+  }
+  return max === undefined ? undefined : watermarkOf(max);
+}
+
+// The cursor only ever moves forward, so a batch re-sent from the rewind window
+// can never pull it back before conversations already committed.
+async function advanceCursor(platform: AdapterPlatform, candidate: string): Promise<void> {
+  const current = await getCursor(platform);
+  if (current === undefined || compareTimestamps(candidate, current) > 0) {
+    await setCursor(platform, candidate);
+  }
+}
+
+interface CounterDelta {
+  readonly uploaded?: number;
+  readonly skipped?: number;
+  readonly nowMs?: number;
+}
+
+async function addCounters(delta: CounterDelta): Promise<void> {
   const existing = (await getCounters()) ?? {
     conversations_uploaded: 0,
     conversations_skipped: 0,
     last_run_at: null,
   };
   await setCounters({
-    ...existing,
-    conversations_skipped: existing.conversations_skipped + droppedCount,
+    conversations_uploaded: existing.conversations_uploaded + (delta.uploaded ?? 0),
+    conversations_skipped: existing.conversations_skipped + (delta.skipped ?? 0),
+    last_run_at: delta.nowMs === undefined ? existing.last_run_at : isoFromMs(delta.nowMs),
   });
-}
-
-function maxWatermark(batch: IngestConversationRequest): string | undefined {
-  let max: ConversationPayload | undefined;
-  for (const conversation of batch.conversations) {
-    if (max === undefined || compareWatermarks(conversation, max) > 0) max = conversation;
-  }
-  return max === undefined ? undefined : watermarkOf(max);
 }
 
 // Cursor + counters advance TOGETHER after a 200 so a crash between the two
@@ -355,22 +424,29 @@ function maxWatermark(batch: IngestConversationRequest): string | undefined {
 async function commitBatch(
   platform: AdapterPlatform,
   batch: IngestConversationRequest,
-  conversationsSaved: number,
-  nowMs: number,
+  delta: CounterDelta,
 ): Promise<void> {
-  const watermark = maxWatermark(batch);
-  if (watermark !== undefined) await setCursor(platform, watermark);
+  const watermark = newestWatermark(batch.conversations);
+  if (watermark !== undefined) await advanceCursor(platform, watermark);
+  await addCounters(delta);
+}
 
-  const existing = (await getCounters()) ?? {
-    conversations_uploaded: 0,
-    conversations_skipped: 0,
-    last_run_at: null,
-  };
-  await setCounters({
-    ...existing,
-    conversations_uploaded: existing.conversations_uploaded + conversationsSaved,
-    last_run_at: isoFromMs(nowMs),
-  });
+// Where the cursor goes once every batch of a request committed: the newest
+// watermark of the whole request, dropped conversations included. When the
+// listing was complete, a dropped conversation is also pushed past the collect
+// rewind so the next listing excludes it; that is safe because every listed
+// conversation up to it has committed. The push stops at the moment the run
+// listed, so a conversation changed after that is still listed next time.
+function completedRequestCursor(
+  plan: BatchPlan,
+  request: IngestConversationRequest,
+  listing: ListingScope,
+): string | undefined {
+  const newest = newestWatermark(request.conversations);
+  const newestDrop = newestWatermark(plan.dropped);
+  if (newest === undefined || newestDrop === undefined || !listing.isComplete) return newest;
+  const pastDropMs = Math.min(timestampMs(newestDrop) + CURSOR_REWIND_MS, listing.listedAtMs);
+  return laterTimestamp(newest, isoFromMs(pastDropMs));
 }
 
 // Backoff window for a transient failure, grown per consecutive failure and
@@ -417,14 +493,36 @@ type UploadLoopResult =
   | { kind: "paused" } // pause already set; stop this platform, continue run
   | { kind: "reconnect" }; // status set reconnect_required; abort the whole run
 
+// What the collect behind a request covered: whether the listing was complete
+// (not cut short), and when it was taken.
+interface ListingScope {
+  readonly isComplete: boolean;
+  readonly listedAtMs: number;
+}
+
 async function uploadBatches(
   deps: RunSyncDeps,
   platform: AdapterPlatform,
   request: IngestConversationRequest,
+  listing: ListingScope,
 ): Promise<UploadLoopResult> {
-  const { batches, droppedCount } = toBatches(request);
-  await recordDroppedOversize(platform, droppedCount);
-  for (const batch of batches) {
+  const plan = toBatches(request);
+  const cursorBefore = await getCursor(platform);
+  const result = await uploadAllBatches(deps, platform, plan);
+  if (result.kind === "complete") {
+    const target = completedRequestCursor(plan, request, listing);
+    if (target !== undefined) await advanceCursor(platform, target);
+  }
+  await recordDroppedOversize(platform, plan.dropped, cursorBefore);
+  return result;
+}
+
+async function uploadAllBatches(
+  deps: RunSyncDeps,
+  platform: AdapterPlatform,
+  plan: BatchPlan,
+): Promise<UploadLoopResult> {
+  for (const batch of plan.batches) {
     const result = await uploadOneBatch(deps, platform, batch);
     if (result.kind !== "continue") return result;
   }
@@ -472,10 +570,17 @@ async function applyUploadOutcome(
 ): Promise<SingleBatchResult> {
   switch (outcome.status) {
     case "ok": {
-      await commitBatch(platform, batch, outcome.response.conversations_saved, deps.now());
+      if (outcome.response.extractions_skipped_error > 0) {
+        return applyPartialSave(deps, platform, batch, outcome.response);
+      }
+      await commitBatch(platform, batch, {
+        uploaded: outcome.response.conversations_saved,
+        nowMs: deps.now(),
+      });
       // A clean batch resets the consecutive-transient streak so a later isolated
       // transient blip starts the backoff from the base window again.
       await clearTransientCount(platform);
+      await clearPartialSaveCount(platform);
       if (outcome.response.budget_exhausted) {
         // The batch SAVED -- extraction is paused server-side by budget, not a
         // failure. Keep advancing the cursor; surface a non-error note only.
@@ -536,6 +641,43 @@ async function applyUploadOutcome(
   }
 }
 
+// A 200 whose body reports failed saves. What saved is counted now; the cursor
+// stays so the whole batch is re-sent (the server dedupes the saved ones), and
+// the later batches wait, since committing them would move the cursor past the
+// failed conversations.
+async function applyPartialSave(
+  deps: RunSyncDeps,
+  platform: AdapterPlatform,
+  batch: IngestConversationRequest,
+  response: IngestConversationResponse,
+): Promise<SingleBatchResult> {
+  const holds = await getPartialSaveCount(platform);
+  if (holds >= PARTIAL_SAVE_HOLD_LIMIT) {
+    logger.warn("committing a partially saved batch after repeated holds", {
+      platform,
+      failed: response.extractions_skipped_error,
+    });
+    await commitBatch(platform, batch, {
+      uploaded: response.conversations_saved,
+      skipped: response.extractions_skipped_error,
+      nowMs: deps.now(),
+    });
+    await clearTransientCount(platform);
+    await clearPartialSaveCount(platform);
+    return { kind: "continue" };
+  }
+  await addCounters({ uploaded: response.conversations_saved, nowMs: deps.now() });
+  await setPartialSaveCount(platform, holds + 1);
+  const consecutive = await bumpTransientCount(platform);
+  await pause(
+    deps,
+    platform,
+    "transient",
+    deps.now() + transientBackoffMs(consecutive, deps.random),
+  );
+  return { kind: "paused" };
+}
+
 async function reconnect(deps: RunSyncDeps, platform: AdapterPlatform): Promise<SingleBatchResult> {
   await deps.setStatus(platform, "reconnect_required");
   await appendSyncEvent({ at: isoFromMs(deps.now()), kind: EVENT.reconnect, platform });
@@ -562,22 +704,25 @@ async function syncPlatform(deps: RunSyncDeps, platform: AdapterPlatform): Promi
 
   const cursor = await getCursor(platform);
   const since = effectiveSince(cursor);
-  await setPlatformLastRunAt(platform, isoFromMs(deps.now()));
+  const listedAtMs = deps.now();
+  await setPlatformLastRunAt(platform, isoFromMs(listedAtMs));
   const outcome = await deps.collect(tabId, platform, since);
 
-  return consumeCollectOutcome(deps, platform, outcome);
+  return consumeCollectOutcome(deps, platform, outcome, listedAtMs);
 }
 
 async function consumeCollectOutcome(
   deps: RunSyncDeps,
   platform: AdapterPlatform,
   outcome: CollectOutcome,
+  listedAtMs: number,
 ): Promise<PlatformResult> {
+  const truncated: ListingScope = { isComplete: false, listedAtMs };
   if (outcome.status === "failed") {
     // Upload whatever partial batch was collected before the list failure, then
     // pause by the mapped reason. Cursor never advances past the uncollected
     // remainder -- commitBatch only moves it to the partial batch's watermark.
-    const upload = await uploadBatches(deps, platform, outcome.request);
+    const upload = await uploadBatches(deps, platform, outcome.request, truncated);
     if (upload.kind === "reconnect") return "abort_run";
     if (upload.kind === "paused") return "continue";
     if (outcome.reason === "session_lost") {
@@ -595,7 +740,7 @@ async function consumeCollectOutcome(
   }
 
   if (outcome.status === "rate_limited") {
-    const upload = await uploadBatches(deps, platform, outcome.request);
+    const upload = await uploadBatches(deps, platform, outcome.request, truncated);
     if (upload.kind === "reconnect") return "abort_run";
     if (upload.kind === "paused") return "continue";
     await pause(
@@ -619,7 +764,10 @@ async function consumeCollectOutcome(
   const driftResult = await updateDrift(deps, platform, outcome.failures.malformed_response);
   if (driftResult === "paused") return "continue";
 
-  const upload = await uploadBatches(deps, platform, outcome.request);
+  const upload = await uploadBatches(deps, platform, outcome.request, {
+    isComplete: outcome.complete,
+    listedAtMs,
+  });
   if (upload.kind === "reconnect") return "abort_run";
   if (upload.kind === "paused") return "continue";
 
