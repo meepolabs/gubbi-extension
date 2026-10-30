@@ -10,9 +10,55 @@ import type { RawFetchOutcome } from "./base";
 
 const HTTP_TOO_MANY_REQUESTS = 429;
 
-// Same-origin GET with cookies. Returns the raw Response so callers can inspect
-// status before consuming the body.
-export function sameOriginGet(url: string, headers?: Record<string, string>): Promise<Response> {
+export const SOURCE_REQUEST_SPACING_MS = 500;
+export const SOURCE_REQUEST_TIMEOUT_MS = 30_000;
+
+interface SourceRequestTiming {
+  readonly spacingMs: number;
+  readonly timeoutMs: number;
+}
+
+const DEFAULT_TIMING: SourceRequestTiming = {
+  spacingMs: SOURCE_REQUEST_SPACING_MS,
+  timeoutMs: SOURCE_REQUEST_TIMEOUT_MS,
+};
+
+let timing: SourceRequestTiming = DEFAULT_TIMING;
+let nextSlotAt = Number.NEGATIVE_INFINITY;
+
+export function setSourceRequestTiming(overrides: Partial<SourceRequestTiming>): void {
+  timing = { ...timing, ...overrides };
+}
+
+export function resetSourceRequestTiming(): void {
+  timing = DEFAULT_TIMING;
+  nextSlotAt = Number.NEGATIVE_INFINITY;
+}
+
+// The slot is reserved synchronously so concurrent callers queue behind each
+// other instead of reading the same free slot. performance.now() is monotonic:
+// a wall-clock jump back cannot push the next slot hours into the future.
+function reserveSlotDelayMs(): number {
+  const now = performance.now();
+  const start = Math.max(now, nextSlotAt);
+  nextSlotAt = start + timing.spacingMs;
+  return start - now;
+}
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Same-origin GET with cookies, started no sooner than the spacing after the
+// previous one from this content-script instance. Returns the raw Response so
+// callers can inspect status before consuming the body.
+export async function sameOriginGet(
+  url: string,
+  headers?: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<Response> {
+  await sleep(reserveSlotDelayMs());
   return fetch(url, {
     method: "GET",
     credentials: "include",
@@ -20,6 +66,7 @@ export function sameOriginGet(url: string, headers?: Record<string, string>): Pr
     // same-origin read should never bounce off-origin.
     redirect: "error",
     headers: headers ?? {},
+    ...(signal === undefined ? {} : { signal }),
   });
 }
 
@@ -68,19 +115,45 @@ export function failureFromResponse<T>(response: Response): RawFetchOutcome<T> {
   return { status: "error", error: `request failed with status ${response.status}` };
 }
 
-// Wraps a fetch-and-parse-JSON in a try/catch that maps a thrown network error
-// (offline, DNS, redirect:error rejection) to a RawFetchOutcome error rather
-// than letting it propagate. The body is parsed as JSON only on a 2xx.
+// Fetches and parses JSON under one deadline spanning the headers AND the body.
+// A thrown network error (offline, DNS, redirect:error rejection) or an expired
+// deadline maps to a "network request failed" error outcome rather than
+// propagating. The body is parsed as JSON only on a 2xx.
+//
+// The deadline is a plain setTimeout + AbortController: AbortSignal.any is
+// missing on the Firefox floor and AbortSignal.timeout rejects with a different
+// error name on older Chrome. The abort cancels the real request; the race is
+// still needed because a body that ignores the signal would otherwise hang. An
+// abort-driven body rejection reaches the race only through readJson's await,
+// so the deadline always settles it first and an expiry never reads as invalid
+// JSON.
 export async function fetchJson<T>(
   url: string,
   headers?: Record<string, string>,
 ): Promise<RawFetchOutcome<T>> {
-  let response: Response;
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`no response within ${timing.timeoutMs} ms`));
+      controller.abort();
+    }, timing.timeoutMs);
+  });
   try {
-    response = await sameOriginGet(url, headers);
+    return await Promise.race([readJson<T>(url, headers, controller.signal), deadline]);
   } catch (e) {
     return { status: "error", error: networkErrorMessage(e) };
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+async function readJson<T>(
+  url: string,
+  headers: Record<string, string> | undefined,
+  signal: AbortSignal,
+): Promise<RawFetchOutcome<T>> {
+  const response = await sameOriginGet(url, headers, signal);
   if (!response.ok) return failureFromResponse<T>(response);
   try {
     const data = (await response.json()) as T;

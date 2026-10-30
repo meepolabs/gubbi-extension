@@ -1,15 +1,21 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ChatGptFetcher } from "../../src/lib/connectors/chatgpt/fetch";
 import { ClaudeFetcher } from "../../src/lib/connectors/claude/fetch";
+import { resetSourceRequestTiming, setSourceRequestTiming } from "../../src/lib/connectors/http";
 import { toListOutcome } from "../../src/lib/connectors/outcome";
 
 import rawListPage1 from "../fixtures/raw-claude-list-page-1.json";
 import rawListPage2 from "../fixtures/raw-claude-list-page-2.json";
 import rawOrganizations from "../fixtures/raw-claude-organizations.json";
 
+beforeEach(() => {
+  setSourceRequestTiming({ spacingMs: 0 });
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
+  resetSourceRequestTiming();
 });
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {

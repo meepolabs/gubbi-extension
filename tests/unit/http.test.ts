@@ -1,6 +1,21 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { failureFromResponse, fetchJson, parseRetryAfter } from "../../src/lib/connectors/http";
+import type { RawFetchOutcome } from "../../src/lib/connectors/base";
+import {
+  SOURCE_REQUEST_SPACING_MS,
+  SOURCE_REQUEST_TIMEOUT_MS,
+  failureFromResponse,
+  fetchJson,
+  parseRetryAfter,
+  resetSourceRequestTiming,
+} from "../../src/lib/connectors/http";
+import { toFailure } from "../../src/lib/connectors/outcome";
+
+type ErrorOutcome = Extract<RawFetchOutcome<unknown>, { status: "error" }>;
+
+beforeEach(() => {
+  resetSourceRequestTiming();
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -140,5 +155,136 @@ describe("fetchJson", () => {
     // Assert
     const init = spy.mock.calls[0]![1];
     expect(init?.credentials).toBe("include");
+  });
+});
+
+describe("fetchJson pacing", () => {
+  beforeEach(() => {
+    resetSourceRequestTiming();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    resetSourceRequestTiming();
+  });
+
+  it("starts consecutive same-origin requests at least the spacing apart", async () => {
+    // Arrange
+    const startedAt: number[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+      startedAt.push(Date.now());
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+
+    // Act
+    const run = (async () => {
+      for (let i = 0; i < 3; i += 1) await fetchJson("https://claude.ai/api/organizations");
+    })();
+    await vi.runAllTimersAsync();
+    await run;
+
+    // Assert
+    expect(startedAt).toHaveLength(3);
+    expect(startedAt[1]! - startedAt[0]!).toBeGreaterThanOrEqual(SOURCE_REQUEST_SPACING_MS);
+    expect(startedAt[2]! - startedAt[1]!).toBeGreaterThanOrEqual(SOURCE_REQUEST_SPACING_MS);
+  });
+
+  it("gives concurrent callers distinct slots", async () => {
+    // Arrange
+    const startedAt: number[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+      startedAt.push(Date.now());
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+
+    // Act
+    const pending = Promise.all([
+      fetchJson("https://chatgpt.com/a"),
+      fetchJson("https://chatgpt.com/b"),
+    ]);
+    await vi.runAllTimersAsync();
+    await pending;
+
+    // Assert
+    expect(startedAt).toHaveLength(2);
+    expect(startedAt[1]! - startedAt[0]!).toBeGreaterThanOrEqual(SOURCE_REQUEST_SPACING_MS);
+  });
+});
+
+describe("fetchJson deadline", () => {
+  beforeEach(() => {
+    resetSourceRequestTiming();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    resetSourceRequestTiming();
+  });
+
+  it("classifies a fetch that never settles as network at the deadline", async () => {
+    // Arrange
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
+    let outcome: RawFetchOutcome<unknown> | undefined;
+
+    // Act
+    const pending = fetchJson("https://chatgpt.com/x").then((o) => (outcome = o));
+    await vi.advanceTimersByTimeAsync(SOURCE_REQUEST_TIMEOUT_MS - 1);
+    const settledBeforeDeadline = outcome !== undefined;
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+
+    // Assert
+    expect(settledBeforeDeadline).toBe(false);
+    expect(outcome?.status).toBe("error");
+    expect(toFailure(outcome as ErrorOutcome)).toEqual({ ok: false, reason: "network" });
+    expect(fetchSpy.mock.calls[0]![1]?.signal?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("classifies a 200 whose body never settles as network at the deadline", async () => {
+    // Arrange
+    const response = new Response("{}", { status: 200 });
+    vi.spyOn(response, "json").mockReturnValue(new Promise(() => {}));
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+    let outcome: RawFetchOutcome<unknown> | undefined;
+
+    // Act
+    const pending = fetchJson("https://claude.ai/x").then((o) => (outcome = o));
+    await vi.advanceTimersByTimeAsync(SOURCE_REQUEST_TIMEOUT_MS - 1);
+    const settledBeforeDeadline = outcome !== undefined;
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+
+    // Assert
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(settledBeforeDeadline).toBe(false);
+    expect(toFailure(outcome as ErrorOutcome)).toEqual({ ok: false, reason: "network" });
+    expect(fetchSpy.mock.calls[0]![1]?.signal?.aborted).toBe(true);
+  });
+
+  it("leaves no timer pending after a successful call", async () => {
+    // Arrange
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
+
+    // Act
+    const outcome = await fetchJson("https://claude.ai/x");
+
+    // Assert
+    expect(outcome).toEqual({ status: "ok", data: {} });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("still reports an unparseable 200 body as invalid JSON", async () => {
+    // Arrange
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("not json", { status: 200 }));
+
+    // Act
+    const outcome = await fetchJson("https://claude.ai/x");
+
+    // Assert
+    expect(outcome).toEqual({ status: "error", error: "response body was not valid JSON" });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
