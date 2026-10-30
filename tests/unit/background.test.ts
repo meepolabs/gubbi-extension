@@ -42,6 +42,13 @@ function stubChromeCapturing(): ChromeCapture {
       onStartup: { addListener: vi.fn((l: () => void) => (capture.startupListener = l)) },
       onMessage: { addListener: vi.fn((l: MessageListener) => (capture.messageListener = l)) },
     },
+    storage: {
+      local: {
+        get: vi.fn(async () => ({})),
+        set: vi.fn(async () => undefined),
+        remove: vi.fn(async () => undefined),
+      },
+    },
     alarms: {
       create: vi.fn(async () => undefined),
       onAlarm: {
@@ -120,6 +127,27 @@ describe("background startup-recovery gate", () => {
     // Assert: the per-worker memo collapses both into a single recovery.
     expect(runStartupRecovery).toHaveBeenCalledTimes(1);
     expect(runSync).toHaveBeenCalledTimes(2);
+  });
+  it("retries a rejected recovery on the next PAIR_START instead of memoizing the failure", async () => {
+    // Arrange: the first recovery on this worker rejects; later ones succeed.
+    const capture = stubChromeCapturing();
+    const background = await loadFreshBackground();
+    background.main();
+    runStartupRecovery.mockRejectedValueOnce(new Error("recovery failed"));
+    const firstResponse = vi.fn();
+    const secondResponse = vi.fn();
+
+    // Act: two PAIR_STARTs on the same worker.
+    capture.messageListener!({ type: "PAIR_START" }, POPUP_SENDER, firstResponse);
+    await vi.waitFor(() => expect(firstResponse).toHaveBeenCalled());
+    capture.messageListener!({ type: "PAIR_START" }, POPUP_SENDER, secondResponse);
+    await vi.waitFor(() => expect(secondResponse).toHaveBeenCalled());
+
+    // Assert: the failure surfaced once, then recovery re-ran and pairing proceeded.
+    expect(firstResponse).toHaveBeenCalledWith({ ok: false, reason: "internal" });
+    expect(secondResponse).toHaveBeenCalledWith({ ok: true });
+    expect(runStartupRecovery).toHaveBeenCalledTimes(2);
+    expect(pair).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -30,12 +30,17 @@ const SYNC_PERIOD_MINUTES = 30;
 // already-rotated refresh token and trip Hydra's reuse detection (whole-chain
 // revocation -> silent logout). So recovery is gated into the sync trigger path,
 // not just onStartup. The SW script re-executes on every cold start, so this
-// module-level memo resets per worker -- recovery runs exactly once per lifetime,
-// before any sync/auth work, regardless of which event woke the worker.
+// module-level memo resets per worker -- a successful recovery runs exactly once
+// per lifetime, before any sync/auth work, regardless of which event woke the
+// worker. A rejected recovery clears the memo so the next trigger retries it;
+// otherwise one failure would block pairing and sync until the worker restarts.
 let recoveryPromise: Promise<void> | undefined;
 
 function ensureRecovered(): Promise<void> {
-  return (recoveryPromise ??= runStartupRecovery());
+  return (recoveryPromise ??= runStartupRecovery().catch((error: unknown) => {
+    recoveryPromise = undefined;
+    throw error;
+  }));
 }
 
 function ensureSyncAlarm(): void {

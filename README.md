@@ -228,7 +228,7 @@ entrypoints/
   background.ts           service worker: startup recovery + sync alarm + message router
   chatgpt.content/        chatgpt.com content script (isolated world)
   claude.content/         claude.ai content script (isolated world)
-  popup/                  popup UI (index.html + main.ts; scaffolding, full UI later)
+  popup/                  popup: pair / sync now / disconnect, platform toggles, status
   options/                options page (index.html + main.ts; scaffolding, full UI later)
 src/
   lib/
