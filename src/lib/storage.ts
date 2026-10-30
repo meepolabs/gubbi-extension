@@ -25,6 +25,8 @@ const Keys = {
   refreshState: `${KEY_PREFIX}refreshState`,
   pauseState: (platform: Platform): string => `${KEY_PREFIX}pauseState:${platform}`,
   status: (platform: Platform): string => `${KEY_PREFIX}status:${platform}`,
+  enabled: (platform: Platform): string => `${KEY_PREFIX}enabled:${platform}`,
+  lastRunAt: (platform: Platform): string => `${KEY_PREFIX}lastRunAt:${platform}`,
   syncEvents: `${KEY_PREFIX}syncEvents`,
   schemaVersion: `${KEY_PREFIX}schema_version`,
   // The auth single-flight lock lives in src/lib/locks.ts; only its storage key
@@ -58,6 +60,11 @@ export type SyncCounters = z.infer<typeof SyncCountersSchema>;
 
 // Per-platform incremental-sync cursor (an ISO-8601 timestamp).
 const CursorSchema = z.iso.datetime();
+
+const PlatformEnabledSchema = z.boolean();
+
+// When a sweep of one platform last reached collect (an ISO-8601 timestamp).
+const PlatformLastRunAtSchema = z.iso.datetime();
 
 // OAuth token material plus its connection status. `version` advances on every
 // token rotation; refreshState records the version observed before a refresh so
@@ -214,6 +221,25 @@ export async function getStatus(platform: Platform): Promise<SyncStatusState> {
 
 export function setStatus(platform: Platform, state: SyncStatusState): Promise<void> {
   return setItem(Keys.status(platform), state);
+}
+
+// A platform is enabled unless the user explicitly turned it off: an absent or
+// unparseable value reads as enabled so a corrupt write never silently stops sync.
+export async function getPlatformEnabled(platform: Platform): Promise<boolean> {
+  const enabled = await getItem(Keys.enabled(platform), (raw) => PlatformEnabledSchema.parse(raw));
+  return enabled ?? true;
+}
+
+export function setPlatformEnabled(platform: Platform, enabled: boolean): Promise<void> {
+  return setItem(Keys.enabled(platform), enabled);
+}
+
+export function getPlatformLastRunAt(platform: Platform): Promise<string | undefined> {
+  return getItem(Keys.lastRunAt(platform), (raw) => PlatformLastRunAtSchema.parse(raw));
+}
+
+export function setPlatformLastRunAt(platform: Platform, isoTimestamp: string): Promise<void> {
+  return setItem(Keys.lastRunAt(platform), isoTimestamp);
 }
 
 export async function getSyncEvents(): Promise<SyncEvent[]> {

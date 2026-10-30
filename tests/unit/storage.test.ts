@@ -5,6 +5,8 @@ import {
   getAuthBlob,
   getPauseState,
   getPendingAuthFlow,
+  getPlatformEnabled,
+  getPlatformLastRunAt,
   getRefreshState,
   getSchemaVersion,
   getStatus,
@@ -13,6 +15,8 @@ import {
   migrate,
   setAuthBlob,
   setPauseState,
+  setPlatformEnabled,
+  setPlatformLastRunAt,
   setRefreshState,
   setSchemaVersion,
   setStatus,
@@ -267,6 +271,66 @@ describe("pauseState (per-platform namespacing)", () => {
 
     // Act
     const result = await getPauseState("chatgpt");
+
+    // Assert
+    expect(result).toBeUndefined();
+  });
+});
+
+describe("platform enabled flag (absent or corrupt = enabled)", () => {
+  it.each([
+    { name: "absent", stored: undefined, expected: true },
+    { name: "stored true", stored: true, expected: true },
+    { name: "stored false", stored: false, expected: false },
+    { name: "corrupt string", stored: "false", expected: true },
+    { name: "corrupt number", stored: 0, expected: true },
+    { name: "corrupt null", stored: null, expected: true },
+  ])("reads $name as $expected", async ({ stored, expected }) => {
+    // Arrange
+    stubChromeStorage(stored === undefined ? {} : { "gubbi:enabled:claude": stored });
+
+    // Act
+    const result = await getPlatformEnabled("claude");
+
+    // Assert
+    expect(result).toBe(expected);
+  });
+
+  it("keys chatgpt and claude independently", async () => {
+    // Arrange
+    const store: Record<string, unknown> = {};
+    stubPersistentStorage(store);
+
+    // Act
+    await setPlatformEnabled("claude", false);
+
+    // Assert
+    expect(await getPlatformEnabled("claude")).toBe(false);
+    expect(await getPlatformEnabled("chatgpt")).toBe(true);
+    expect(store["gubbi:enabled:claude"]).toBe(false);
+  });
+});
+
+describe("platform lastRunAt (validated read)", () => {
+  it("round-trips an ISO timestamp per platform", async () => {
+    // Arrange
+    const store: Record<string, unknown> = {};
+    stubPersistentStorage(store);
+
+    // Act
+    await setPlatformLastRunAt("chatgpt", "2026-06-06T12:00:00.000Z");
+
+    // Assert
+    expect(await getPlatformLastRunAt("chatgpt")).toBe("2026-06-06T12:00:00.000Z");
+    expect(await getPlatformLastRunAt("claude")).toBeUndefined();
+  });
+
+  it("returns undefined for a stored value that is not an ISO timestamp", async () => {
+    // Arrange
+    stubChromeStorage({ "gubbi:lastRunAt:chatgpt": "yesterday" });
+
+    // Act
+    const result = await getPlatformLastRunAt("chatgpt");
 
     // Assert
     expect(result).toBeUndefined();

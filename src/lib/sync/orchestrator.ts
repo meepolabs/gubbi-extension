@@ -8,10 +8,12 @@ import {
   getCounters,
   getCursor,
   getPauseState,
+  getPlatformEnabled,
   getStatus,
   setCounters,
   setCursor,
   setPauseState,
+  setPlatformLastRunAt,
   setStatus,
   SYNC_LEASE_KEY,
 } from "../storage";
@@ -78,9 +80,9 @@ const TRANSIENT_BASE_BACKOFF_MS = 60 * 1000;
 const TRANSIENT_MAX_BACKOFF_MS = 30 * 60 * 1000;
 const TRANSIENT_JITTER_MS = 30 * 1000;
 
-// The platforms a run sweeps, in order. Both are enabled for now; a per-platform
-// enabled flag would be read here when one exists.
-const ENABLED_PLATFORMS: readonly AdapterPlatform[] = ["chatgpt", "claude"];
+// The platforms a full run considers, in order. Each is swept only if its
+// per-platform enabled flag is on at run start.
+const ALL_PLATFORMS: readonly AdapterPlatform[] = ["chatgpt", "claude"];
 
 // Coarse, content-free event kinds for the diagnostic ring buffer. Never carries
 // message text, tokens, PII, or conversation identifiers.
@@ -561,6 +563,7 @@ async function syncPlatform(deps: RunSyncDeps, platform: AdapterPlatform): Promi
 
   const cursor = await getCursor(platform);
   const since = effectiveSince(cursor);
+  await setPlatformLastRunAt(platform, isoFromMs(deps.now()));
   const outcome = await deps.collect(tabId, platform, since);
 
   return consumeCollectOutcome(deps, platform, outcome);
@@ -669,17 +672,27 @@ export interface RunSyncOptions {
   readonly deps?: Partial<RunSyncDeps>;
 }
 
+async function enabledPlatforms(
+  candidates: readonly AdapterPlatform[],
+): Promise<AdapterPlatform[]> {
+  const flags = await Promise.all(candidates.map((platform) => getPlatformEnabled(platform)));
+  return candidates.filter((_platform, index) => flags[index]);
+}
+
 // Run one sync sweep under the single-flight lease. A second concurrent call
 // short-circuits (LockContendedError) so two wakes never double-sync.
 export async function runSync(options: RunSyncOptions = {}): Promise<void> {
   const deps: RunSyncDeps = { ...realDeps, ...(options.deps ?? {}) };
-  const platforms = options.platform !== undefined ? [options.platform] : ENABLED_PLATFORMS;
+  const candidates = options.platform !== undefined ? [options.platform] : ALL_PLATFORMS;
 
   try {
     await withStorageLock(SYNC_LEASE_KEY, SYNC_LEASE_TTL_MS, async () => {
       await appendSyncEvent({ at: isoFromMs(deps.now()), kind: EVENT.runStart });
       await appendSyncEvent({ at: isoFromMs(deps.now()), kind: EVENT.leaseAcquired });
 
+      // Flags are snapshotted here: turning a platform off mid-run stops future
+      // runs only, never the sweep already in flight.
+      const platforms = await enabledPlatforms(candidates);
       for (const platform of platforms) {
         const result = await syncPlatform(deps, platform);
         if (result === "abort_run") break;

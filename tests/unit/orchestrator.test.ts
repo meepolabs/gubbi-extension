@@ -1014,3 +1014,83 @@ describe("oversize_batch from the server", () => {
     expect(bundle.statuses().at(-1)).toBe("paused");
   });
 });
+
+describe("per-platform enabled flag", () => {
+  it("skips a disabled platform in a full run", async () => {
+    // Arrange
+    const stub = stubChrome();
+    stub.store["gubbi:enabled:claude"] = false;
+    const bundle = makeDeps();
+
+    // Act
+    await runSync({ deps: bundle.deps });
+
+    // Assert
+    expect(bundle.collect.mock.calls.map((call) => call[1])).toEqual(["chatgpt"]);
+  });
+
+  it("skips a disabled platform in a manual single-platform run", async () => {
+    // Arrange
+    const stub = stubChrome();
+    stub.store["gubbi:enabled:claude"] = false;
+    const bundle = makeDeps();
+
+    // Act
+    await runSync({ platform: "claude", deps: bundle.deps });
+
+    // Assert
+    expect(bundle.findTab).not.toHaveBeenCalled();
+    expect(bundle.collect).not.toHaveBeenCalled();
+  });
+
+  it("finishes the in-flight upload when the flag is turned off during collect", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const bundle = makeDeps();
+    bundle.collect.mockImplementation(async () => {
+      stub.store["gubbi:enabled:chatgpt"] = false;
+      return collectOk(requestOf(conversation("c1", "2026-02-01T00:00:00.000Z")));
+    });
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(bundle.upload).toHaveBeenCalledTimes(1);
+    expect(cursorOf(stub.store, "chatgpt")).toBe("2026-02-01T00:00:00.000Z");
+  });
+});
+
+describe("per-platform lastRunAt", () => {
+  it("records the injected clock when a sweep reaches collect", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const bundle = makeDeps();
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(stub.store["gubbi:lastRunAt:chatgpt"]).toBe(new Date(NOW_MS).toISOString());
+    expect(stub.store["gubbi:lastRunAt:claude"]).toBeUndefined();
+  });
+
+  it("leaves lastRunAt unchanged when the sweep is skipped by an active pause", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const previous = "2026-06-01T00:00:00.000Z";
+    stub.store["gubbi:lastRunAt:chatgpt"] = previous;
+    stub.store["gubbi:pauseState:chatgpt"] = {
+      pausedUntil: new Date(NOW_MS + 60_000).toISOString(),
+      reason: "rate_limited",
+    };
+    const bundle = makeDeps();
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    expect(bundle.collect).not.toHaveBeenCalled();
+    expect(stub.store["gubbi:lastRunAt:chatgpt"]).toBe(previous);
+  });
+});
