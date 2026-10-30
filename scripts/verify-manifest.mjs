@@ -2,7 +2,9 @@
 // expected background shape and permissions, that host_permissions is exactly
 // the set the build env yields (content hosts plus the API and auth hosts the
 // egress allowlist allows), and that the Chrome key and Firefox gecko id match
-// the pinned browser identities.
+// the pinned browser identities. host_permissions must also equal the set the
+// built bundle's egress allowlist actually carries, so a value the bundler read
+// differently from this env loader cannot ship unnoticed.
 //
 // Run after `wxt build` for both browsers: `node scripts/verify-manifest.mjs`.
 // Exit 0 = all assertions pass; exit 1 = a mismatch (details printed).
@@ -12,6 +14,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 
+import { bundleEndpointEnv, readBundleSources } from "./bundle-endpoints.mjs";
 import { chromeIdFromKey } from "./extension-id.mjs";
 import { endpointHosts, hostPermissions } from "./host-permissions.mjs";
 
@@ -154,6 +157,23 @@ function checkHostPermissions(manifest, browser, errors) {
   }
 }
 
+function checkBundleAllowlist(manifest, browserKey, errors) {
+  let expected;
+  try {
+    const sources = readBundleSources(resolve(ROOT, ".output", browserKey));
+    expected = hostPermissions(bundleEndpointEnv(ENDPOINT_VARIABLES, sources));
+  } catch (err) {
+    errors.push(`bundle allowlist: ${err.message}`);
+    return;
+  }
+  const actual = manifest.host_permissions;
+  if (!sortedEqual(actual, expected)) {
+    errors.push(
+      `bundle allowlist: host_permissions ${JSON.stringify(actual)} != ${JSON.stringify(expected)}`,
+    );
+  }
+}
+
 function checkManifest(browserKey, browser, expectBackground) {
   const errors = [];
   const manifest = readManifest(browserKey);
@@ -167,6 +187,7 @@ function checkManifest(browserKey, browser, expectBackground) {
     );
   }
   checkHostPermissions(manifest, browser, errors);
+  checkBundleAllowlist(manifest, browserKey, errors);
 
   const background = manifest.background ?? {};
   if (expectBackground === "service_worker" && typeof background.service_worker !== "string") {
@@ -211,7 +232,7 @@ function main() {
     } else {
       console.log(
         `verify-manifest OK for ${browserKey}: MV3, ${expectBackground} background, ` +
-          `permissions match, host_permissions equal the build env set, identity pinned.`,
+          `permissions match, host_permissions equal the build env and bundle allowlist sets, identity pinned.`,
       );
     }
   }

@@ -66,6 +66,10 @@ const DEFAULT_RATE_LIMIT_BACKOFF_MS = 30 * 60 * 1000;
 // Shortest pause any rate-limit produces, whatever Retry-After advises.
 const MIN_RATE_LIMIT_BACKOFF_MS = 60 * 1000;
 
+// Longest pause any rate-limit produces, so an absurd Retry-After can neither
+// overflow the pausedUntil timestamp nor park a platform for years.
+const MAX_RATE_LIMIT_BACKOFF_MS = 24 * 60 * 60 * 1000;
+
 // Backoff while waiting for a logged-in platform tab to appear. Distinct from
 // the rate-limit default (though equal for now) so tuning one never silently
 // moves the other -- a tab wait is not a rate-limit condition.
@@ -499,14 +503,21 @@ function transientBackoffMs(consecutive: number, random: () => number): number {
 }
 
 // Backoff window for a rate-limit. A server-advised Retry-After is honored but
-// floored, so a "retry now" (0) or a tiny hint still yields a real pause rather
-// than an immediate re-hit of the API that just throttled us. Only an ABSENT hint
-// (null/undefined) falls back to the default window.
+// clamped: floored so a "retry now" (0) or a tiny hint still yields a real pause
+// rather than an immediate re-hit of the API that just throttled us, and capped
+// so a huge hint (Infinity included) stays a representable, bounded pause. An
+// absent hint (null/undefined) or NaN carries no information and falls back to
+// the default window.
 function rateLimitBackoffMs(retryAfterSeconds: number | null | undefined): number {
-  if (retryAfterSeconds === null || retryAfterSeconds === undefined) {
+  if (
+    retryAfterSeconds === null ||
+    retryAfterSeconds === undefined ||
+    Number.isNaN(retryAfterSeconds)
+  ) {
     return DEFAULT_RATE_LIMIT_BACKOFF_MS;
   }
-  return Math.max(retryAfterSeconds * 1000, MIN_RATE_LIMIT_BACKOFF_MS);
+  const advisedMs = retryAfterSeconds * 1000;
+  return Math.min(Math.max(advisedMs, MIN_RATE_LIMIT_BACKOFF_MS), MAX_RATE_LIMIT_BACKOFF_MS);
 }
 
 async function pause(

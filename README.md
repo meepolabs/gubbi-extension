@@ -103,8 +103,8 @@ pnpm verify         # check + lint + test + both builds + manifest assertions
 The content-isolation gate runs inside `pnpm build` (and therefore `pnpm
 verify`) for both browser outputs; `pnpm verify` additionally asserts both
 manifests are MV3 with the expected background shape and permissions, and that
-each manifest's host permissions are exactly the set its build env yields
-(see Build-time configuration).
+each manifest's host permissions are exactly the set its build env yields and
+the set its bundled egress allowlist carries (see Build-time configuration).
 
 Do not background the dev server; run `pnpm dev` in your own terminal.
 
@@ -139,8 +139,13 @@ re-derives that set per browser from the env files WXT loads for a production
 build (`.env`, `.env.local`, `.env.production[.local]`,
 `.env.<browser>[.local]`, `.env.production.<browser>[.local]`, later files
 winning, a non-empty shell value winning over all of them) and fails unless
-each manifest carries exactly that set. `${VAR}` references in env files are
-not expanded by the verifier and fail it; write endpoint values literally.
+each manifest carries exactly that set. It also reads the endpoint values the
+built bundle's egress allowlist actually inlined (every `.js` under
+`.output/<browser>/`) and fails unless the manifest equals the set those yield,
+or if it cannot read them. Vite's own `.env` loading is switched off
+(`envDir: false` in `wxt.config.ts`), so the bundle sees only the values WXT
+loaded. `${VAR}` references in env files are not expanded by the verifier and
+fail it; write endpoint values literally.
 
 **Non-production artifact.** To build for another deployment, put its hosts in
 the gitignored `.env.local` (shell variables work too), then run:
@@ -215,7 +220,8 @@ wxt.config.ts             WXT config: manifest fn, imports:false, isolation hook
 scripts/
   content-isolation.ts    in-build Rollup gate: no node_modules in content bundles
   host-permissions.mjs     manifest host_permissions from the endpoint env vars
-  verify-manifest.mjs      post-build manifest + env-derived host_permissions assertions
+  bundle-endpoints.mjs     reads the endpoint values a built bundle inlined
+  verify-manifest.mjs      post-build manifest + env- and bundle-derived host_permissions assertions
   verify-required-needs.mjs  CI gate: `required` needs every other job (copy of gubbi-web's)
 content-isolation/        committed per-browser wxt-internal allowlist snapshots
 entrypoints/

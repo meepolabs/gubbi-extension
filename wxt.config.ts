@@ -72,6 +72,12 @@ export default defineConfig({
     return { ...base, key: CHROME_KEY };
   },
 
+  // WXT has already loaded the .env* files into process.env with node:util
+  // parseEnv. Vite's own env loader parses the same files with a looser
+  // grammar, so letting it run could inline a VITE_* value the manifest never
+  // saw; with envDir off, import.meta.env.VITE_* comes from process.env only.
+  vite: () => ({ envDir: false }),
+
   hooks: {
     // Inject the content-isolation Rollup gate into every build step that
     // includes content-script entrypoints. The gate walks each content entry's

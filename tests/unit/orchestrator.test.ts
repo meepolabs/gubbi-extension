@@ -15,7 +15,11 @@ import { INGEST_MAX_BODY_BYTES, serializeRequest, uploadConversations } from "..
 import { LockContendedError } from "../../src/lib/locks";
 import { ClaudeFetcher } from "../../src/lib/connectors/claude/fetch";
 import { makeContentMessageListener } from "../../src/lib/connectors/content-listener";
-import { resetSourceRequestTiming, setSourceRequestTiming } from "../../src/lib/connectors/http";
+import {
+  parseRetryAfter,
+  resetSourceRequestTiming,
+  setSourceRequestTiming,
+} from "../../src/lib/connectors/http";
 import { collectFromTab } from "../../src/lib/sync/collect";
 import { stubChromeStorageWithEvents as stubChrome } from "../helpers/chrome-stub";
 
@@ -603,6 +607,49 @@ describe("rate limiting", () => {
     const pause = pauseOf(stub.store, "chatgpt");
     expect(pause?.reason).toBe("rate_limited");
     expect(Date.parse(pause!.pausedUntil)).toBe(NOW_MS + 30 * 60_000);
+  });
+
+  // Retry-After values whose seconds overflow a Date: the header parser hands
+  // them through, so the pause must cap them rather than throw mid-run.
+  it.each([
+    { name: "a 13-digit Retry-After", header: "8640000000000" },
+    { name: "a 400-digit Retry-After", header: "9".repeat(400) },
+    { name: "a ten-year Retry-After", header: "315360000" },
+  ])("caps $name at a 24 h pause and leaves the platform paused", async ({ header }) => {
+    // Arrange
+    const stub = stubChrome();
+    const bundle = makeDeps();
+    const retryAfterSeconds = parseRetryAfter(
+      new Response(null, { status: 429, headers: { "retry-after": header } }),
+    );
+    bundle.upload.mockResolvedValue({
+      status: "rate_limited",
+      retryAfterSeconds: retryAfterSeconds ?? null,
+    });
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    const pause = pauseOf(stub.store, "chatgpt");
+    expect(pause?.reason).toBe("rate_limited");
+    expect(Date.parse(pause!.pausedUntil)).toBe(NOW_MS + 24 * 60 * 60_000);
+    expect(bundle.statuses().at(-1)).toBe("paused");
+  });
+
+  it("pauses for the 30 min default when Retry-After is not a number", async () => {
+    // Arrange
+    const stub = stubChrome();
+    const bundle = makeDeps();
+    bundle.upload.mockResolvedValue({ status: "rate_limited", retryAfterSeconds: Number.NaN });
+
+    // Act
+    await runSync({ platform: "chatgpt", deps: bundle.deps });
+
+    // Assert
+    const pause = pauseOf(stub.store, "chatgpt");
+    expect(Date.parse(pause!.pausedUntil)).toBe(NOW_MS + 30 * 60_000);
+    expect(bundle.statuses().at(-1)).toBe("paused");
   });
 });
 
