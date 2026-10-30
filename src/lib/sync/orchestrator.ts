@@ -25,7 +25,11 @@ import {
   uploadConversations as realUpload,
   type UploadOutcome,
 } from "../api";
-import { collectFromTab as realCollect, type CollectOutcome } from "./collect";
+import {
+  collectFromTab as realCollect,
+  type CollectOutcome,
+  type ListedConversation,
+} from "./collect";
 import type { AdapterPlatform } from "../connectors/base";
 import type {
   IngestConversationRequest,
@@ -93,6 +97,12 @@ export const DRIFT_THRESHOLD = 5;
 // and counts its failures as skipped, so one conversation the server can never
 // save cannot stall the platform for good.
 export const PARTIAL_SAVE_HOLD_LIMIT = 5;
+
+// A run stops at the first conversation whose detail fetch fails; after this many
+// consecutive stops on the same unchanged conversation, the next run skips it and
+// counts it as skipped, so one conversation that always fails cannot stall the
+// platform for good.
+export const DETAIL_STOP_LIMIT = 5;
 
 // Transient backoff: a base window grown per consecutive transient failure and
 // capped, with jitter so many clients do not retry in lockstep.
@@ -297,6 +307,85 @@ async function setForcedCommits(
     return;
   }
   await chrome.storage.local.set({ [forcedCommitKey(platform)]: fingerprints });
+}
+
+// ---- Consecutive detail stops on one conversation (persisted across wakes) ---
+
+const DETAIL_STOP_KEY_PREFIX = "gubbi:detailStop:";
+
+const DetailStopSchema = z.object({
+  platformId: z.string(),
+  updatedAt: z.string(),
+  count: z.number().int().positive(),
+});
+
+type DetailStopRecord = z.infer<typeof DetailStopSchema>;
+
+function detailStopKey(platform: AdapterPlatform): string {
+  return `${DETAIL_STOP_KEY_PREFIX}${platform}`;
+}
+
+async function getDetailStop(platform: AdapterPlatform): Promise<DetailStopRecord | undefined> {
+  const record = await chrome.storage.local.get(detailStopKey(platform));
+  const parsed = DetailStopSchema.safeParse(record[detailStopKey(platform)]);
+  return parsed.success ? parsed.data : undefined;
+}
+
+async function clearDetailStop(platform: AdapterPlatform): Promise<void> {
+  await chrome.storage.local.remove(detailStopKey(platform));
+}
+
+// A lost session fails every conversation alike, so it says nothing about the
+// one the run stopped on and leaves the streak as it was. A conversation listed
+// without updated_at cannot be recognized as unchanged, so it is never counted.
+async function recordDetailStop(
+  platform: AdapterPlatform,
+  outcome: Extract<CollectOutcome, { status: "failed" }>,
+): Promise<void> {
+  const stoppedAt = outcome.stoppedAt;
+  if (stoppedAt === undefined || outcome.reason === "session_lost") return;
+  if (stoppedAt.updatedAt === null) {
+    await clearDetailStop(platform);
+    return;
+  }
+  const previous = await getDetailStop(platform);
+  const isSame =
+    previous !== undefined &&
+    previous.platformId === stoppedAt.platformId &&
+    previous.updatedAt === stoppedAt.updatedAt;
+  const next: DetailStopRecord = {
+    platformId: stoppedAt.platformId,
+    updatedAt: stoppedAt.updatedAt,
+    count: isSame ? previous.count + 1 : 1,
+  };
+  await chrome.storage.local.set({ [detailStopKey(platform)]: next });
+}
+
+// Once a conversation reached the stop limit, remember it with the forced
+// commits: it is then left out of detail fetches until its updated_at changes,
+// and forgotten once the cursor's rewind window passes it.
+async function giveUpOnStuckConversation(platform: AdapterPlatform): Promise<void> {
+  const stuck = await getDetailStop(platform);
+  if (stuck === undefined || stuck.count < DETAIL_STOP_LIMIT) return;
+  logger.warn("skipping a conversation whose detail fetch keeps failing", {
+    platform,
+    stops: stuck.count,
+  });
+  const remembered = await getForcedCommits(platform);
+  await setForcedCommits(platform, [
+    ...remembered,
+    { platformId: stuck.platformId, watermark: stuck.updatedAt },
+  ]);
+  await addCounters({ skipped: 1 });
+  await clearDetailStop(platform);
+}
+
+async function skippedConversations(platform: AdapterPlatform): Promise<ListedConversation[]> {
+  const remembered = await getForcedCommits(platform);
+  return remembered.map((fingerprint) => ({
+    platformId: fingerprint.platformId,
+    updatedAt: fingerprint.watermark,
+  }));
 }
 
 // ---- Helpers -----------------------------------------------------------------
@@ -806,7 +895,9 @@ async function syncPlatform(deps: RunSyncDeps, platform: AdapterPlatform): Promi
   const since = effectiveSince(cursor);
   const listedAtMs = deps.now();
   await setPlatformLastRunAt(platform, isoFromMs(listedAtMs));
-  const outcome = await deps.collect(tabId, platform, since);
+  await giveUpOnStuckConversation(platform);
+  const skip = await skippedConversations(platform);
+  const outcome = await deps.collect(tabId, platform, since, skip);
 
   return consumeCollectOutcome(deps, platform, outcome, listedAtMs);
 }
@@ -822,6 +913,7 @@ async function consumeCollectOutcome(
     // Upload whatever partial batch was collected before the failure, then
     // pause by the mapped reason. Cursor never advances past the uncollected
     // remainder -- commitBatch only moves it to the partial batch's watermark.
+    await recordDetailStop(platform, outcome);
     const upload = await uploadBatches(deps, platform, outcome.request, truncated);
     if (upload.kind === "reconnect") return "abort_run";
     if (upload.kind === "paused") return "continue";
@@ -857,6 +949,7 @@ async function consumeCollectOutcome(
   }
 
   // status === "ok".
+  await clearDetailStop(platform);
   //
   // Update drift tracking from THIS collect's malformed tally BEFORE uploading,
   // so the consecutive-malformed streak reflects the collect result regardless of

@@ -185,7 +185,8 @@ function emptyFailureCounts(): FailureCounts {
 //                     malformed listing), with an empty `request`; or a
 //                     retryable non-429 CONVERSATION failure (session lost,
 //                     network, 5xx), with the oldest-first prefix collected
-//                     before it. `reason` is the mapped FailureReason the
+//                     before it and `stoppedAt` naming the listed conversation
+//                     it stopped on. `reason` is the mapped FailureReason the
 //                     orchestrator branches on.
 //
 // The orchestrator consumes this: on "ok" with complete=true it uploads and
@@ -210,7 +211,15 @@ export type CollectOutcome =
       status: "failed";
       reason: FailureReason;
       request: IngestConversationRequest;
+      stoppedAt?: ListedConversation;
     };
+
+// A listed conversation identified by its id and the updated_at it was listed
+// with, so an unchanged conversation is recognized across runs.
+export interface ListedConversation {
+  readonly platformId: string;
+  readonly updatedAt: string | null;
+}
 
 // Drives one platform tab through list -> fetch -> normalize and returns a
 // CollectOutcome. Upload is intentionally NOT performed here (the orchestrator
@@ -218,13 +227,16 @@ export type CollectOutcome =
 // On the FIRST rate-limit (list or conversation), or the first retryable
 // conversation failure, the run stops immediately -- no further
 // CONVERSATION_REQUESTs are issued -- and the partial batch is returned so the
-// orchestrator can upload what we have and then back off. A tab disconnect or a shape-mismatched response from a
-// stale content script is mapped (in the request helpers above) to a structured
-// failed/transient outcome, never an uncaught exception.
+// orchestrator can upload what we have and then back off. A tab disconnect or a
+// shape-mismatched response from a stale content script is mapped (in the
+// request helpers above) to a structured failed/transient outcome, never an
+// uncaught exception. A listed conversation matching an entry of `skip` by id
+// and updated_at is not fetched.
 export async function collectFromTab(
   tabId: number,
   platform: AdapterPlatform,
   since?: string,
+  skip: readonly ListedConversation[] = [],
 ): Promise<CollectOutcome> {
   const listResult = await requestList(tabId, platform, since);
   const listOutcome = extractSummaries(listResult);
@@ -248,7 +260,8 @@ export async function collectFromTab(
   const raws: unknown[] = [];
   const failures = emptyFailureCounts();
   let stop: DetailStop | null = null;
-  for (const summary of detailOrder(listOutcome.summaries)) {
+  let stoppedAt: ListedConversation | null = null;
+  for (const summary of detailOrder(withoutSkipped(listOutcome.summaries, skip))) {
     const conversationResult = await requestConversation(tabId, platform, summary.platform_id);
     const conversationOutcome = extractRaw(conversationResult);
     if (conversationOutcome.status === "ok") {
@@ -264,6 +277,7 @@ export async function collectFromTab(
       // Any other failure is retryable. Detail runs oldest first, so stopping
       // here leaves an oldest prefix and the cursor never passes this one.
       stop = conversationOutcome;
+      stoppedAt = { platformId: summary.platform_id, updatedAt: summary.updated_at };
       break;
     }
   }
@@ -280,7 +294,9 @@ export async function collectFromTab(
     return { status: "rate_limited", retryAfterSeconds: stop.retryAfterSeconds, request };
   }
   if (stop?.status === "failed") {
-    return { status: "failed", reason: stop.reason, request };
+    return stoppedAt === null
+      ? { status: "failed", reason: stop.reason, request }
+      : { status: "failed", reason: stop.reason, request, stoppedAt };
   }
 
   // INTENTIONAL PHASE-2 SEAM (accepted, not a TODO): pagination is a connector
@@ -293,6 +309,19 @@ export async function collectFromTab(
   // the orchestrator can rely on them before the connector wiring lands; no
   // behavior change is implied by their presence today.
   return { status: "ok", request, complete: true, failures };
+}
+
+function withoutSkipped(
+  summaries: readonly ConversationSummary[],
+  skip: readonly ListedConversation[],
+): ConversationSummary[] {
+  return summaries.filter(
+    (summary) =>
+      !skip.some(
+        (entry) =>
+          entry.platformId === summary.platform_id && entry.updatedAt === summary.updated_at,
+      ),
+  );
 }
 
 // The orchestrator commits the newest watermark it uploaded, so a run cut short
