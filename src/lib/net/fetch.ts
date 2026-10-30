@@ -39,7 +39,43 @@ export const ALLOWED_HOSTS: ReadonlySet<string> = new Set(
   ].filter((host): host is string => host !== undefined),
 );
 
-export function guardedFetch(input: string | URL, init?: RequestInit): Promise<Response> {
+export const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+
+export class FetchDeadlineError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Outbound request exceeded its ${timeoutMs} ms deadline`);
+    this.name = "FetchDeadlineError";
+  }
+}
+
+export interface GuardedFetchOptions {
+  readonly timeoutMs?: number;
+}
+
+// The Response constructor rejects a body for these statuses.
+const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304]);
+
+// The body is read to completion here, under the same deadline as the request,
+// so a server that sends headers and then stalls cannot hold the caller past
+// the deadline. Callers get an in-memory Response; url / redirected / type are
+// not carried over.
+async function fetchBuffered(url: URL, init: RequestInit): Promise<Response> {
+  const response = await fetch(url, init);
+  const body = NULL_BODY_STATUSES.has(response.status) ? null : await response.arrayBuffer();
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+// Not async: the allowlist and scheme checks throw synchronously, before any
+// request exists.
+export function guardedFetch(
+  input: string | URL,
+  init?: RequestInit,
+  options?: GuardedFetchOptions,
+): Promise<Response> {
   const url = input instanceof URL ? input : new URL(input);
   if (!ALLOWED_HOSTS.has(url.host)) {
     throw new Error(`Blocked outbound request to disallowed host: ${url.host}`);
@@ -47,10 +83,30 @@ export function guardedFetch(input: string | URL, init?: RequestInit): Promise<R
   if (url.protocol !== "https:") {
     throw new Error(`Blocked non-HTTPS outbound request: ${url.protocol}`);
   }
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  const controller = new AbortController();
   // redirect:"error" rejects any redirect rather than silently following one to
-  // a host that bypassed the check above. It is placed AFTER the init spread so
-  // a caller-supplied init.redirect can never weaken it: redirect blocking is
-  // non-overridable, keeping an allowed host's redirect from escaping the
-  // allowlist.
-  return fetch(url, { ...init, redirect: "error" });
+  // a host that bypassed the check above. It and the deadline signal are placed
+  // AFTER the init spread so a caller-supplied init.redirect or init.signal can
+  // never weaken redirect blocking or outlive the deadline.
+  const request = fetchBuffered(url, { ...init, redirect: "error", signal: controller.signal });
+
+  return new Promise<Response>((resolve, reject) => {
+    // Expiry rejects on its own rather than relying on the abort to reject: a
+    // transport may still settle successfully once aborted, and expiry must win.
+    const timer = setTimeout(() => {
+      reject(new FetchDeadlineError(timeoutMs));
+      controller.abort();
+    }, timeoutMs);
+    request.then(
+      (response) => {
+        clearTimeout(timer);
+        resolve(response);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }

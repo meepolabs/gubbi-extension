@@ -29,6 +29,9 @@ export const INGEST_PATH = "/v1/ingest/conversations";
 // Mirrors the backend's per-request body cap; a larger body is rejected with 413.
 export const INGEST_MAX_BODY_BYTES = 26_214_400;
 
+// A full-size batch upload needs longer than guardedFetch's default deadline.
+export const INGEST_UPLOAD_TIMEOUT_MS = 120_000;
+
 // The exact request body the client sends. Batch sizing measures this same
 // serialization so the client-side byte budget matches what goes on the wire.
 export function serializeRequest(request: IngestConversationRequest): string {
@@ -109,16 +112,20 @@ export async function uploadConversations(
 
   let response: Response;
   try {
-    response = await guardedFetch(url, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-        "content-type": "application/json",
+    response = await guardedFetch(
+      url,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          "content-type": "application/json",
+        },
+        body: serializeRequest(request),
       },
-      body: serializeRequest(request),
-    });
+      { timeoutMs: INGEST_UPLOAD_TIMEOUT_MS },
+    );
   } catch {
-    // Transport failure, redirect rejection, or disallowed host.
+    // Transport failure, deadline expiry, redirect rejection, or disallowed host.
     return { status: "network" };
   }
 
