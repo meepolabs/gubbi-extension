@@ -2,20 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Background wiring test. defineBackground just returns its definition object, so
 // we import the entrypoint's default export and invoke main() to register the
-// listeners against a chrome stub. We mock the orchestrator (runSync/getSyncStatus)
+// listeners against a chrome stub. We mock the orchestrator (runSync)
 // and auth (runStartupRecovery) so the test asserts ORDERING -- that startup
 // recovery runs once per worker, before any sync, even when onStartup never fires.
 
-const { runStartupRecovery, runSync, getSyncStatus } = vi.hoisted(() => ({
+const { runStartupRecovery, runSync, pair, unpair } = vi.hoisted(() => ({
   runStartupRecovery: vi.fn(async () => undefined),
   runSync: vi.fn(async () => undefined),
-  getSyncStatus: vi.fn(async () => "idle" as const),
+  pair: vi.fn(async () => ({ ok: true }) as const),
+  unpair: vi.fn(async () => ({ ok: true }) as const),
 }));
 
-vi.mock("../../src/lib/auth", () => ({ runStartupRecovery }));
-vi.mock("../../src/lib/sync/orchestrator", () => ({ runSync, getSyncStatus }));
+vi.mock("../../src/lib/auth", () => ({ runStartupRecovery, pair, unpair }));
+vi.mock("../../src/lib/sync/orchestrator", () => ({ runSync }));
 
-import { isExtensionMessage } from "../../src/lib/messages";
+const RUNTIME_ID = "extension-under-test";
+const POPUP_SENDER = { id: RUNTIME_ID };
 
 type MessageListener = (
   message: unknown,
@@ -35,6 +37,7 @@ function stubChromeCapturing(): ChromeCapture {
   const capture: ChromeCapture = {};
   const chromeMock = {
     runtime: {
+      id: RUNTIME_ID,
       onInstalled: { addListener: vi.fn() },
       onStartup: { addListener: vi.fn((l: () => void) => (capture.startupListener = l)) },
       onMessage: { addListener: vi.fn((l: MessageListener) => (capture.messageListener = l)) },
@@ -61,9 +64,7 @@ async function loadFreshBackground(): Promise<{ main: () => void }> {
 
 // Lets a void-launched async body settle before assertions.
 async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 10; i += 1) await Promise.resolve();
 }
 
 beforeEach(() => {
@@ -95,7 +96,7 @@ describe("background startup-recovery gate", () => {
     });
 
     // Act: deliver a SYNC_START message (onStartup is deliberately never invoked).
-    capture.messageListener!({ type: "SYNC_START" }, undefined, vi.fn());
+    capture.messageListener!({ type: "SYNC_START" }, POPUP_SENDER, vi.fn());
     await flushMicrotasks();
 
     // Assert: recovery ran, and it ran before the sync.
@@ -113,16 +114,60 @@ describe("background startup-recovery gate", () => {
     // Act: an alarm wake then a message wake -- both on the same worker.
     capture.alarmListener!({ name: "sync" });
     await flushMicrotasks();
-    capture.messageListener!({ type: "SYNC_START" }, undefined, vi.fn());
+    capture.messageListener!({ type: "SYNC_START" }, POPUP_SENDER, vi.fn());
     await flushMicrotasks();
 
     // Assert: the per-worker memo collapses both into a single recovery.
     expect(runStartupRecovery).toHaveBeenCalledTimes(1);
     expect(runSync).toHaveBeenCalledTimes(2);
   });
+});
 
-  it("guard sanity: SYNC_START is a recognized extension message", () => {
-    // The trigger path only fires for messages the guard accepts.
-    expect(isExtensionMessage({ type: "SYNC_START" })).toBe(true);
+describe("background control message routing", () => {
+  it("keeps the channel open and answers a control message once", async () => {
+    const capture = stubChromeCapturing();
+    const background = await loadFreshBackground();
+    background.main();
+    const sendResponse = vi.fn();
+
+    const keepOpen = capture.messageListener!({ type: "UNPAIR" }, POPUP_SENDER, sendResponse);
+    await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
+
+    expect(keepOpen).toBe(true);
+    expect(sendResponse).toHaveBeenCalledTimes(1);
+    expect(sendResponse).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it("refuses a SYNC_START sent from a content script tab", async () => {
+    const capture = stubChromeCapturing();
+    const background = await loadFreshBackground();
+    background.main();
+    const sendResponse = vi.fn();
+
+    capture.messageListener!(
+      { type: "SYNC_START" },
+      { id: RUNTIME_ID, tab: { id: 3 } },
+      sendResponse,
+    );
+    await vi.waitFor(() => expect(sendResponse).toHaveBeenCalled());
+
+    expect(sendResponse).toHaveBeenCalledWith({ ok: false, reason: "forbidden_sender" });
+    expect(runSync).not.toHaveBeenCalled();
+  });
+
+  it("ignores a non-control message without claiming the channel", async () => {
+    const capture = stubChromeCapturing();
+    const background = await loadFreshBackground();
+    background.main();
+    const sendResponse = vi.fn();
+
+    const keepOpen = capture.messageListener!(
+      { type: "LIST_RESULT", platform: "chatgpt", result: { ok: true, summaries: [] } },
+      POPUP_SENDER,
+      sendResponse,
+    );
+
+    expect(keepOpen).toBe(false);
+    expect(sendResponse).not.toHaveBeenCalled();
   });
 });

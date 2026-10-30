@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isControlMessageType,
   isExtensionMessage,
   FAILURE_REASONS,
   SYNC_STATUS_STATES,
@@ -48,9 +49,17 @@ describe("isExtensionMessage", () => {
     expect(isExtensionMessage({ type: "STATUS_REQUEST" })).toBe(true);
   });
 
-  it("accepts a STATUS_RESULT message", () => {
+  it.each([
+    { type: "PAIR_START" },
+    { type: "UNPAIR" },
+    { type: "SET_PLATFORM_ENABLED", platform: "claude", enabled: false },
+  ])("accepts a $type control message", (message) => {
+    expect(isExtensionMessage(message)).toBe(true);
+  });
+
+  it("no longer accepts the retired STATUS_RESULT message", () => {
     expect(isExtensionMessage({ type: "STATUS_RESULT", platform: "chatgpt", state: "idle" })).toBe(
-      true,
+      false,
     );
   });
 
@@ -115,8 +124,25 @@ describe("SyncStatusState", () => {
     expect(new Set(SYNC_STATUS_STATES)).toEqual(new Set(states));
     expect(SYNC_STATUS_STATES).toHaveLength(states.length);
   });
+});
 
-  it.each(states)("round-trips a STATUS_RESULT with state %s", (state) => {
-    expect(isExtensionMessage({ type: "STATUS_RESULT", platform: "claude", state })).toBe(true);
+describe("isControlMessageType", () => {
+  it.each(["SYNC_START", "STATUS_REQUEST", "PAIR_START", "UNPAIR", "SET_PLATFORM_ENABLED"])(
+    "claims %s as a control type",
+    (type) => {
+      expect(isControlMessageType({ type })).toBe(true);
+    },
+  );
+
+  it.each(["LIST_REQUEST", "LIST_RESULT", "CONVERSATION_RESULT", "SYNC_PROGRESS", "STATUS_RESULT"])(
+    "leaves %s to other listeners",
+    (type) => {
+      expect(isControlMessageType({ type })).toBe(false);
+    },
+  );
+
+  it("rejects non-object values", () => {
+    expect(isControlMessageType(null)).toBe(false);
+    expect(isControlMessageType("PAIR_START")).toBe(false);
   });
 });

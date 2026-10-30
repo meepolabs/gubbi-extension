@@ -1,8 +1,11 @@
 import type { Platform } from "./schema/ingest";
 import type { ConversationSummary } from "./connectors/base";
+import type { PairResult, UnpairResult } from "./auth";
+import type { PauseState } from "./storage";
 
 // Single message envelope for service-worker <-> content-script <-> popup
-// communication. The "type" field is the discriminant. This module is types +
+// communication. The control surface the extension pages use is documented at
+// ControlMessage below. The "type" field is the discriminant. This module is types +
 // a guard only; it intentionally pulls in no runtime third-party code so it is
 // safe to import from content scripts (all schema/adapter imports are type-only
 // and erased at build).
@@ -11,11 +14,6 @@ import type { ConversationSummary } from "./connectors/base";
 // or Zod-validates. Normalization happens in the background after a
 // CONVERSATION_RESULT arrives, which is why CONVERSATION_RESULT carries
 // `raw: unknown`, not a validated ConversationPayload.
-
-export interface SyncStartMessage {
-  type: "SYNC_START";
-  platform?: Platform;
-}
 
 export interface SyncProgressMessage {
   type: "SYNC_PROGRESS";
@@ -129,11 +127,22 @@ export interface ConversationResultMessage {
   result: ConversationOutcome;
 }
 
-// STATUS_* lets the popup poll the background for the current per-platform sync
-// state. STATUS_REQUEST is a bare ping; STATUS_RESULT carries the popup-facing
-// state. SyncStatusState is intentionally a small, presentation-oriented union
-// (not the orchestrator's internal machine state) -- it is what the popup
-// renders, so it changes on UX needs, not on internal control-flow churn.
+// ---- Control surface (popup / options / onboarding -> background) ----------
+//
+// Control messages are sent with chrome.runtime.sendMessage from an extension
+// page. The background answers EVERY control message with exactly one response
+// (ControlResponseMap below); none of them is a fire-and-forget event.
+//
+// Trust rule: the background rejects a control message sent from a tab (a
+// content script; sender.tab is set) or from another extension (sender.id is not
+// this extension's id) with { ok: false, reason: "forbidden_sender" }, and one
+// whose payload does not match its type with "invalid_payload". Neither changes
+// any state.
+//
+// Privacy rule: responses carry only the enumerated fields below. No token,
+// raw platform or server response, exception text, or conversation id ever
+// crosses this boundary.
+
 export type SyncStatusState = "idle" | "syncing" | "paused" | "reconnect_required";
 
 const SYNC_STATUS_STATE_PRESENCE: Record<SyncStatusState, true> = {
@@ -147,14 +156,110 @@ export const SYNC_STATUS_STATES: readonly SyncStatusState[] = Object.keys(
   SYNC_STATUS_STATE_PRESENCE,
 ) as SyncStatusState[];
 
+// Manual "Sync now". Omit platform to sweep every enabled platform. Answered as
+// soon as the run is started; progress is read back through STATUS_REQUEST.
+export interface SyncStartMessage {
+  type: "SYNC_START";
+  platform?: Platform;
+}
+
 export interface StatusRequestMessage {
   type: "STATUS_REQUEST";
 }
 
-export interface StatusResultMessage {
-  type: "STATUS_RESULT";
+// Runs the interactive OAuth pairing in the background (the popup closes when
+// the auth window opens). On success every platform marked reconnect_required
+// returns to idle and a sync starts.
+export interface PairStartMessage {
+  type: "PAIR_START";
+}
+
+// Disconnect: revoke and clear the account's credentials and sync state.
+export interface UnpairMessage {
+  type: "UNPAIR";
+}
+
+// Per-platform sync switch. Turning a platform off stops future runs; a run
+// already in flight finishes.
+export interface SetPlatformEnabledMessage {
+  type: "SET_PLATFORM_ENABLED";
   platform: Platform;
-  state: SyncStatusState;
+  enabled: boolean;
+}
+
+export type ControlMessage =
+  | SyncStartMessage
+  | StatusRequestMessage
+  | PairStartMessage
+  | UnpairMessage
+  | SetPlatformEnabledMessage;
+
+export type ControlErrorReason = "forbidden_sender" | "invalid_payload" | "internal";
+
+export interface ControlError {
+  ok: false;
+  reason: ControlErrorReason;
+}
+
+export interface ControlOk {
+  ok: true;
+}
+
+//   none               -- never paired, or disconnected
+//   ok                 -- paired and no definitive token rejection seen
+//   reconnect_required -- the token was definitively rejected (stored on the
+//                         credentials or on any platform); show "Reconnect"
+export type AuthState = "none" | "ok" | "reconnect_required";
+
+export type PauseReason = PauseState["reason"];
+
+// Timestamps are ISO-8601 strings. pausedUntil and pauseReason are null unless a
+// backoff window is still running; an expired pause reads as null.
+export interface PlatformStatus {
+  platform: Platform;
+  enabled: boolean;
+  status: SyncStatusState;
+  pausedUntil: string | null;
+  pauseReason: PauseReason | null;
+  lastRunAt: string | null;
+}
+
+// nextSyncAt is the earliest scheduled sync wake (periodic or continuation), or
+// null when none is scheduled or the alarm read failed.
+export interface StatusSnapshot {
+  ok: true;
+  auth: AuthState;
+  platforms: PlatformStatus[];
+  nextSyncAt: string | null;
+}
+
+export interface ControlResponseMap {
+  SYNC_START: ControlOk | ControlError;
+  STATUS_REQUEST: StatusSnapshot | ControlError;
+  PAIR_START: PairResult | ControlError;
+  UNPAIR: UnpairResult | ControlError;
+  SET_PLATFORM_ENABLED: ControlOk | ControlError;
+}
+
+export type ControlResponse<T extends ControlMessage["type"] = ControlMessage["type"]> =
+  ControlResponseMap[T];
+
+const CONTROL_MESSAGE_TYPE_PRESENCE: Record<ControlMessage["type"], true> = {
+  SYNC_START: true,
+  STATUS_REQUEST: true,
+  PAIR_START: true,
+  UNPAIR: true,
+  SET_PLATFORM_ENABLED: true,
+};
+
+const CONTROL_MESSAGE_TYPES = new Set<string>(Object.keys(CONTROL_MESSAGE_TYPE_PRESENCE));
+
+// True when value claims a control type. Says nothing about the payload or the
+// sender; the background validates both before acting.
+export function isControlMessageType(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const type = (value as { type?: unknown }).type;
+  return typeof type === "string" && CONTROL_MESSAGE_TYPES.has(type);
 }
 
 export type ExtensionMessage =
@@ -167,7 +272,9 @@ export type ExtensionMessage =
   | ConversationRequestMessage
   | ConversationResultMessage
   | StatusRequestMessage
-  | StatusResultMessage;
+  | PairStartMessage
+  | UnpairMessage
+  | SetPlatformEnabledMessage;
 
 // Compile-time exhaustiveness: a Record keyed by the discriminant union requires
 // exactly one entry per message type, so adding a member to ExtensionMessage
@@ -183,7 +290,9 @@ const MESSAGE_TYPE_PRESENCE: Record<ExtensionMessage["type"], true> = {
   CONVERSATION_REQUEST: true,
   CONVERSATION_RESULT: true,
   STATUS_REQUEST: true,
-  STATUS_RESULT: true,
+  PAIR_START: true,
+  UNPAIR: true,
+  SET_PLATFORM_ENABLED: true,
 };
 
 const MESSAGE_TYPES = new Set<ExtensionMessage["type"]>(

@@ -1,13 +1,15 @@
 import { defineBackground } from "wxt/utils/define-background";
 
-import { runStartupRecovery } from "../src/lib/auth";
-import { logger } from "../src/lib/logger";
-import { isExtensionMessage, type StatusResultMessage } from "../src/lib/messages";
+import { pair, runStartupRecovery, unpair } from "../src/lib/auth";
 import type { AdapterPlatform } from "../src/lib/connectors/base";
-import { getSyncStatus, runSync } from "../src/lib/sync/orchestrator";
+import { handleControlMessage, type ControlDeps } from "../src/lib/control/handlers";
+import { logger } from "../src/lib/logger";
+import { isControlMessageType } from "../src/lib/messages";
+import { runSync } from "../src/lib/sync/orchestrator";
 
 // Background entrypoint. Thin wiring layer: it creates the periodic sync alarm,
-// runs startup recovery, and routes messages + alarms into the sync orchestrator.
+// runs startup recovery, routes alarms into the sync orchestrator and control
+// messages (declared in src/lib/messages.ts) into src/lib/control/handlers.ts.
 // All real sync logic lives in src/lib/sync/orchestrator.ts.
 //
 // Firefox MV3 runs the background as a non-persistent event page, so every event
@@ -20,8 +22,6 @@ import { getSyncStatus, runSync } from "../src/lib/sync/orchestrator";
 const SYNC_ALARM_NAME = "sync";
 const SYNC_CONTINUATION_ALARM_NAME = "sync-continuation";
 const SYNC_PERIOD_MINUTES = 30;
-
-const STATUS_PLATFORMS: readonly AdapterPlatform[] = ["chatgpt", "claude"];
 
 // Memoized once-per-worker-lifetime startup recovery. An MV3 worker can be torn
 // down mid-refresh and later woken by an alarm or a SYNC_START in the SAME
@@ -60,13 +60,16 @@ async function triggerSync(platform?: AdapterPlatform): Promise<void> {
   }
 }
 
-// Build the per-platform status snapshot answer for a STATUS_REQUEST ping.
-async function collectStatus(): Promise<StatusResultMessage[]> {
-  const results: StatusResultMessage[] = [];
-  for (const platform of STATUS_PLATFORMS) {
-    results.push({ type: "STATUS_RESULT", platform, state: await getSyncStatus(platform) });
-  }
-  return results;
+function controlDeps(): ControlDeps {
+  return {
+    runtimeId: chrome.runtime.id,
+    ensureRecovered,
+    startSync: (platform) => void triggerSync(platform),
+    pair,
+    unpair,
+    syncAlarmNames: [SYNC_ALARM_NAME, SYNC_CONTINUATION_ALARM_NAME],
+    now: () => Date.now(),
+  };
 }
 
 export default defineBackground({
@@ -92,35 +95,14 @@ export default defineBackground({
       void triggerSync();
     });
 
-    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-      if (!isExtensionMessage(message)) return false;
-
-      if (message.type === "SYNC_START") {
-        void triggerSync(message.platform);
-        sendResponse({
-          type: "SYNC_PROGRESS",
-          platform: message.platform ?? "chatgpt",
-          processed: 0,
-          total: 0,
-        });
-        return false;
-      }
-
-      if (message.type === "STATUS_REQUEST") {
-        // Async snapshot read: keep the channel open by returning true and
-        // resolving sendResponse once the per-platform states are read.
-        void collectStatus().then(
-          (results) => sendResponse(results),
-          (error: unknown) => {
-            logger.error("status read failed", { error: String(error) });
-            sendResponse([]);
-          },
-        );
-        return true;
-      }
-
-      // Other message types have no background-side handler here.
-      return false;
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      // Content-script results (LIST_RESULT, ...) travel as tabs.sendMessage
+      // replies, not through this listener; only control messages are handled.
+      if (!isControlMessageType(message)) return false;
+      // handleControlMessage never rejects; returning true keeps the channel
+      // open until its single response is sent.
+      void handleControlMessage(message, sender, controlDeps()).then(sendResponse);
+      return true;
     });
   },
 });
